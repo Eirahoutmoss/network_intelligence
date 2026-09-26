@@ -120,7 +120,7 @@ func Load() (*Config, error) {
 		LogFormat:       getenv("NEXUS_LOG_FORMAT", "json"),
 		AdminUser:       getenv("NEXUS_ADMIN_USER", "admin"),
 		SimulatorListen: getenv("NEXUS_SIMULATOR", ""),
-		LLMModel:        getenv("NEXUS_LLM_MODEL", "claude-haiku-4-5"),
+		LLMModel:        getenv("NEXUS_LLM_MODEL", "claude-opus-5"),
 		CookieSecure:    getenv("NEXUS_COOKIE_SECURE", "false") == "true",
 	}
 	var err error

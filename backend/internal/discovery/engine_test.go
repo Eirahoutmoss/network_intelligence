@@ -1,67 +1,20 @@
-package discovery
+package discovery_test
 
 import (
 	"context"
 	"testing"
-	"time"
 
-	"github.com/Eirahoutmoss/network_intelligence/backend/internal/credentials"
-	"github.com/Eirahoutmoss/network_intelligence/backend/internal/inventory"
+	. "github.com/Eirahoutmoss/network_intelligence/backend/internal/discovery"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/lab"
-	"github.com/Eirahoutmoss/network_intelligence/backend/internal/metrics"
-	"github.com/Eirahoutmoss/network_intelligence/backend/internal/snmp"
+	"github.com/Eirahoutmoss/network_intelligence/backend/internal/labtest"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/storage"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/testutil"
-	"github.com/Eirahoutmoss/network_intelligence/backend/internal/vendors/all"
 )
 
-// RunLabDiscovery runs a full discovery of the campus lab into db. Exported
-// for reuse by other packages' tests via a small wrapper.
 func runLab(t *testing.T, db *storage.DB, active bool) (*Engine, int64) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	l := lab.Campus()
-	r, err := l.Start(ctx, "127.0.0.1", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sealer, _ := credentials.NewSealer(testutil.Key())
-	creds := credentials.NewStore(db, sealer)
-	credID, err := creds.CreateSNMP(ctx, db, "lab", credentials.SNMP{Username: l.V3User, AuthPassword: l.V3Pass})
-	if err != nil {
-		t.Fatal(err)
-	}
-	log := testutil.Logger()
-	e := &Engine{
-		DB: db, Store: inventory.New(db, log), Creds: creds, Hub: NewHub(), Log: log, Metrics: metrics.New(),
-		Collector: &Collector{Dialer: snmp.NetDialer{Map: r.Addrs, Strict: true, Opt: snmp.Options{Timeout: time.Second}}, Registry: all.Registry(), Log: log},
-		Prober:    l.Prober(),
-	}
-	e.Start(ctx)
-	id, err := e.Submit(ctx, "10.20.99.1", credID, Options{MaxDepth: 3, ActiveFingerprint: active, TryAllCredentials: true}, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(60 * time.Second)
-	for {
-		var status string
-		var errText *string
-		if err := db.QueryRow(ctx, `SELECT status, error FROM discovery_runs WHERE id=$1`, id).Scan(&status, &errText); err != nil {
-			t.Fatal(err)
-		}
-		if status == "completed" {
-			break
-		}
-		if status == "failed" || status == "cancelled" {
-			t.Fatalf("run %s: %v", status, *errText)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("discovery timed out")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return e, id
+	env := labtest.Discover(t, db, active)
+	return env.Engine, env.RunID
 }
 
 func q1(t *testing.T, db *storage.DB, sql string, args ...any) int {

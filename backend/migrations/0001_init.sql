@@ -530,3 +530,37 @@ WITH RECURSIVE t AS (
     FROM locations l JOIN t ON l.parent_id = t.id
 )
 SELECT * FROM t;
+
+-- One row per device with the display-ready fields shared by the device list,
+-- explorer and reports. Effective location is inferred when the user has not
+-- set one: wall jack mapping first, then the location of the attached switch.
+CREATE VIEW device_view AS
+SELECT d.id,
+       COALESCE(c.display_name, d.sys_name, d.hostname, host(d.mgmt_ip), ip.ip, mac.mac, '#' || d.id) AS name,
+       d.hostname, d.sys_name, c.display_name,
+       COALESCE(c.device_type_override, d.device_type) AS device_type,
+       CASE WHEN c.device_type_override IS NOT NULL THEN 1 ELSE d.device_type_confidence END AS device_type_confidence,
+       c.device_type_override IS NOT NULL AS type_overridden,
+       COALESCE(d.vendor, d.oui_vendor) AS vendor, d.model, d.serial, d.os_name, d.os_confidence, d.os_version,
+       COALESCE(host(d.mgmt_ip), ip.ip) AS ip, mac.mac, d.managed, d.status, d.discovered_via,
+       d.first_seen, d.last_seen, d.uptime_seconds, d.cpu_percent, d.memory_percent,
+       att.switch_id, COALESCE(swc.display_name, sw.sys_name) AS switch_name, att.interface_id AS switch_interface_id,
+       att.port_name AS switch_port, att.vlan_id, att.confidence AS attachment_confidence, att.source AS attachment_source,
+       j.id AS jack_id, j.label AS jack,
+       COALESCE(c.location_id, j.location_id, swc.location_id) AS location_id,
+       CASE WHEN c.location_id IS NOT NULL THEN 'user' WHEN j.location_id IS NOT NULL THEN 'jack'
+            WHEN swc.location_id IS NOT NULL THEN 'switch' END AS location_source,
+       lp.path AS location_path, lp.building, lp.floor, lp.floor_level, lp.room,
+       c.description, c.department,
+       COALESCE((SELECT array_agg(t.tag ORDER BY t.tag) FROM device_tags t WHERE t.device_id = d.id), '{}') AS tags
+FROM devices d
+LEFT JOIN device_context c ON c.device_id = d.id
+LEFT JOIN LATERAL (SELECT host(a.ip) AS ip FROM device_addresses a WHERE a.device_id = d.id
+                   ORDER BY (a.source = 'snmp') DESC, a.last_seen DESC LIMIT 1) ip ON true
+LEFT JOIN LATERAL (SELECT m.mac::text AS mac FROM device_macs m WHERE m.device_id = d.id
+                   ORDER BY (m.source = 'snmp') DESC, m.first_seen LIMIT 1) mac ON true
+LEFT JOIN attachments att ON att.device_id = d.id AND att.ended_at IS NULL
+LEFT JOIN devices sw ON sw.id = att.switch_id
+LEFT JOIN device_context swc ON swc.device_id = att.switch_id
+LEFT JOIN network_jacks j ON j.switch_interface_id = att.interface_id
+LEFT JOIN location_paths lp ON lp.id = COALESCE(c.location_id, j.location_id, swc.location_id);
