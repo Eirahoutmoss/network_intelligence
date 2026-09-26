@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/gosnmp/gosnmp"
 )
@@ -17,8 +18,20 @@ import (
 type Agent struct {
 	MIB       *MIB
 	Community string
-	Log       *slog.Logger
-	conn      net.PacketConn
+	// V3Users enables SNMPv3 (noAuthNoPriv / authNoPriv). Privacy is not simulated.
+	V3Users map[string]V3User
+	Log     *slog.Logger
+	conn    net.PacketConn
+
+	engineID string
+	started  time.Time
+	keys     map[string][]byte
+}
+
+// V3User is a simulated USM user.
+type V3User struct {
+	AuthProtocol string // "" (noAuth) | MD5 | SHA | SHA256 ...
+	AuthPassword string
 }
 
 // Listen binds addr (e.g. "127.0.1.1:16100").
@@ -40,7 +53,9 @@ func (a *Agent) Serve(ctx context.Context) error {
 		<-ctx.Done()
 		a.conn.Close()
 	}()
-	dec := &gosnmp.GoSNMP{Version: gosnmp.Version2c, Logger: gosnmp.NewLogger(log.New(io.Discard, "", 0))}
+	logger := gosnmp.NewLogger(log.New(io.Discard, "", 0))
+	dec := &gosnmp.GoSNMP{Version: gosnmp.Version2c, Logger: logger}
+	a.initV3()
 	buf := make([]byte, 65535)
 	for {
 		n, from, err := a.conn.ReadFrom(buf)
@@ -50,7 +65,14 @@ func (a *Agent) Serve(ctx context.Context) error {
 			}
 			return err
 		}
-		pkt, err := dec.SnmpDecodePacket(append([]byte(nil), buf[:n]...))
+		raw := append([]byte(nil), buf[:n]...)
+		if isV3(raw) {
+			if out := a.handleV3(raw, logger); out != nil {
+				_, _ = a.conn.WriteTo(out, from)
+			}
+			continue
+		}
+		pkt, err := dec.SnmpDecodePacket(raw)
 		if err != nil || pkt.Version == gosnmp.Version3 {
 			continue
 		}

@@ -2,6 +2,7 @@ package snmp
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -128,4 +129,41 @@ func TestAgentRoundTrip(t *testing.T) {
 func mustAtoi(s string) int {
 	n, _ := strconv.Atoi(s)
 	return n
+}
+
+func TestAgentV3(t *testing.T) {
+	m, _ := ParseSnmprec(strings.NewReader(rec))
+	a := &Agent{MIB: m, V3Users: map[string]V3User{"prometheus": {AuthProtocol: "SHA", AuthPassword: "testpass123"}}}
+	if err := a.Listen("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Serve(ctx)
+	_, portStr, _ := strings.Cut(a.Addr().String(), ":")
+	port := mustAtoi(portStr)
+	get := func(user, pass string) (string, error) {
+		c, err := Dial(ctx, "127.0.0.1", credentials.SNMP{Username: user, AuthPassword: pass, Port: port}, Options{Timeout: 500 * time.Millisecond})
+		if err != nil {
+			return "", err
+		}
+		defer c.Close()
+		p, _, err := GetOne(ctx, c, "1.3.6.1.2.1.1.5.0")
+		return p.String(), err
+	}
+	name, err := get("prometheus", "testpass123")
+	if err != nil || name != "SW-CORE-01" {
+		t.Fatalf("v3 get: %q %v", name, err)
+	}
+	c, _ := Dial(ctx, "127.0.0.1", credentials.SNMP{Username: "prometheus", AuthPassword: "testpass123", Port: port}, Options{Timeout: time.Second})
+	w, err := c.Walk(ctx, "1.3.6.1.2.1.2.2.1.2")
+	if err != nil || len(w) != 3 {
+		t.Fatalf("v3 walk: %d %v", len(w), err)
+	}
+	if _, err := get("prometheus", "wrongpass99"); !errors.Is(err, ErrAuth) {
+		t.Fatalf("wrong pass: %v", err)
+	}
+	if _, err := get("nobody", "testpass123"); !errors.Is(err, ErrAuth) {
+		t.Fatalf("unknown user: %v", err)
+	}
 }
