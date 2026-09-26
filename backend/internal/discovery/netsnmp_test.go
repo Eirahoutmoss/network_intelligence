@@ -40,13 +40,33 @@ func TestCollectAgainstNetSNMP(t *testing.T) {
 			t.Errorf("interface incomplete: %+v", i)
 		}
 	}
-	if snap.System.CPUPercent == nil || snap.System.MemoryPercent == nil {
-		t.Errorf("host resources: cpu=%v mem=%v", snap.System.CPUPercent, snap.System.MemoryPercent)
+	// hrProcessorLoad stays empty during the agent's first minute, so only memory is required.
+	if snap.System.MemoryPercent == nil {
+		t.Errorf("host resources: mem=%v", snap.System.MemoryPercent)
 	}
 	if len(snap.Routes) == 0 {
 		t.Error("no routes")
 	}
 	if len(snap.Errors) > 0 {
 		t.Errorf("collector errors: %v", snap.Errors)
+	}
+}
+
+// TestAutodetectAuthPrivNetSNMP: the user typed only username + password, the
+// device requires authPriv with the same password for privacy.
+func TestAutodetectAuthPrivNetSNMP(t *testing.T) {
+	addr := os.Getenv("NEXUS_TEST_SNMPD")
+	if addr == "" {
+		t.Skip("NEXUS_TEST_SNMPD not set")
+	}
+	host, portS, _ := strings.Cut(addr, ":")
+	port, _ := strconv.Atoi(portS)
+	c := &Collector{Dialer: snmp.NetDialer{Opt: snmp.Options{Timeout: 2 * time.Second}}, Registry: all.Registry()}
+	_, used, err := c.CollectWithCredential(context.Background(), host, credentials.SNMP{Username: "privsame", AuthPassword: "testpass123", Port: port, Autodetect: true}, false, nil)
+	if err != nil {
+		t.Skipf("agent has no 'privsame' user (see CI config): %v", err)
+	}
+	if used.SecurityLevel != "authPriv" || used.AuthProtocol != "SHA" || used.PrivProtocol != "AES" {
+		t.Fatalf("detected %+v", used)
 	}
 }

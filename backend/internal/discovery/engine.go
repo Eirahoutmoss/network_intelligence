@@ -374,7 +374,14 @@ func (e *Engine) run(ctx context.Context, rs *runState, seed string, credID *int
 				e.emit(ctx, rs, s)
 			}
 			start := time.Now()
-			snap, lastErr = e.Collector.Collect(ctx, t.ip, cred, true, progress)
+			var used credentials.SNMP
+			snap, used, lastErr = e.Collector.CollectWithCredential(ctx, t.ip, cred, true, progress)
+			if lastErr == nil && cred.Autodetect && !used.Autodetect {
+				// remember the protocols that worked so polling uses them directly
+				if err := e.Creds.UpdateSNMP(ctx, cid, used); err != nil {
+					log.Warn("update detected SNMP settings", "err", err)
+				}
+			}
 			if e.Metrics != nil {
 				e.Metrics.Observe("nexus_collect_duration_seconds", time.Since(start).Seconds())
 			}
