@@ -302,7 +302,7 @@ Section "Nexus" SecMain
   ${EndIf}
 
   DetailPrint "Copying files..."
-  SetDetailsPrint listonly
+  SetDetailsPrint textonly
   SetOutPath "${APPDIR}"
   File /r "${STAGE}\app\${VERSION}\*.*"
   SetOutPath "$INSTDIR"
@@ -320,7 +320,7 @@ Section "Nexus" SecMain
 
   retry:
   Delete "$PLUGINSDIR\result.ini"
-  nsExec::ExecToLog '"${APPDIR}\nexus.exe" install --data "$DataDir" --port $Port --lan $Lan --demo $Demo --result "$PLUGINSDIR\result.ini" $R0'
+  nsExec::ExecToLog '"${APPDIR}\nexus.exe" install --utf16 --data "$DataDir" --port $Port --lan $Lan --demo $Demo --result "$PLUGINSDIR\result.ini" $R0'
   Pop $0
   ReadINIStr $Status "$PLUGINSDIR\result.ini" "result" "status"
   ReadINIStr $Url "$PLUGINSDIR\result.ini" "result" "url"

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -187,6 +188,7 @@ func preflightCommand(args []string) error {
 	port := fs.Int("port", 0, "preferred web port")
 	lan := fs.Bool("lan", false, "web interface reachable from the network")
 	ascii := fs.Bool("ascii", false, "plain markers")
+	utf16 := fs.Bool("utf16", false, "write UTF-16LE (for the NSIS installer window)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -194,14 +196,18 @@ func preflightCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	log := &deploy.Log{Out: os.Stdout, ASCII: *ascii}
+	var out io.Writer = os.Stdout
+	if *utf16 {
+		out = &deploy.UTF16Writer{W: os.Stdout}
+	}
+	log := &deploy.Log{Out: out, ASCII: *ascii, DialogFont: *utf16}
 	rep := deploy.Preflight(deploy.PreflightInput{Layout: l, PreferredPort: *port, LAN: *lan})
 	log.Heading("Checking this computer...")
 	for _, r := range rep.Results {
 		log.Record("preflight", r.Component, r.Severity, r.Message, r.Hint)
 	}
 	if rep.Blocking {
-		return errors.New("this computer does not meet the requirements")
+		return reportedError{errors.New("this computer does not meet the requirements")}
 	}
 	return nil
 }
@@ -239,8 +245,13 @@ func installCommand(args []string) (err error) {
 	noStart := fs.Bool("no-start", false, "install without starting the service")
 	result := fs.String("result", "", "write the outcome as an INI file (for the installer)")
 	ascii := fs.Bool("ascii", false, "plain progress markers")
+	utf16 := fs.Bool("utf16", false, "write progress as UTF-16LE (for the NSIS installer window)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	var out io.Writer = os.Stdout
+	if *utf16 {
+		out = &deploy.UTF16Writer{W: os.Stdout}
 	}
 	if err := requireAdmin(); err != nil {
 		return err
@@ -252,12 +263,13 @@ func installCommand(args []string) (err error) {
 	if err := os.MkdirAll(l.LogDir(), 0o750); err != nil {
 		return err
 	}
-	log, err := deploy.OpenLog(filepath.Join(l.LogDir(), "install.log"), os.Stdout)
+	log, err := deploy.OpenLog(filepath.Join(l.LogDir(), "install.log"), out)
 	if err != nil {
 		return err
 	}
 	defer log.Close()
 	log.ASCII = *ascii
+	log.DialogFont = *utf16
 	log.Record("start", "Installer", deploy.Info, "Nexus "+version+" from "+l.AppDir, "")
 
 	outcome := map[string]string{"status": "failed", "version": version}
@@ -267,6 +279,9 @@ func installCommand(args []string) (err error) {
 				outcome["error"] = strings.ReplaceAll(err.Error(), "\n", " ")
 			}
 			writeResult(*result, outcome)
+		}
+		if err != nil {
+			err = reportedError{err}
 		}
 	}()
 
@@ -488,6 +503,7 @@ func preUpgradeBackup(l deploy.Layout) (string, error) {
 	if _, err := writeBackupFile(ctx, db, cfg, path, "", "before-upgrade"); err != nil {
 		return "", err
 	}
+	pruneBackups(l.BackupDir(), "nexus-before-upgrade-", 5, cliLogger(cfg))
 	return path, nil
 }
 

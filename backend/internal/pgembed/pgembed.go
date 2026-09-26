@@ -70,7 +70,10 @@ func (s *Server) MajorVersion() (string, error) {
 
 // BinaryMajorVersion returns the major version of the bundled binaries.
 func (s *Server) BinaryMajorVersion(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, s.exe("postgres"), "--version").Output()
+	cmd := exec.CommandContext(ctx, s.exe("postgres"), "--version")
+	cmd.WaitDelay = 5 * time.Second
+	hideWindow(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("postgres --version: %w", err)
 	}
@@ -110,6 +113,8 @@ func (s *Server) Init(ctx context.Context) error {
 		"-A", "scram-sha-256", "-E", "UTF8", "--locale=C", "--no-instructions")
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
+	cmd.WaitDelay = 5 * time.Second
+	hideWindow(cmd)
 	s.log().Info("initializing embedded database", "data_dir", s.DataDir)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("initdb failed: %w: %s", err, lastLines(out.String(), 8))
@@ -198,13 +203,22 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.LogDir != "" {
 		startLog = filepath.Join(s.LogDir, "postgres-startup.log")
 	}
+	// pg_ctl output goes to a file, not a pipe: on Windows the postgres
+	// process started by pg_ctl inherits pg_ctl's standard handles, so a pipe
+	// would stay open for the life of the server and Run would never return.
+	outFile, err := os.CreateTemp(filepath.Dir(startLog), ".pg_ctl-*.out")
+	if err != nil {
+		return err
+	}
+	defer func() { outFile.Close(); os.Remove(outFile.Name()) }()
 	cmd := exec.CommandContext(ctx, s.exe("pg_ctl"), "start", "-D", s.DataDir, "-l", startLog, "-w", "-t", "120", "-s")
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
+	cmd.Stdout, cmd.Stderr = outFile, outFile
+	cmd.WaitDelay = 5 * time.Second
 	hideWindow(cmd)
 	if err := cmd.Run(); err != nil {
+		out, _ := os.ReadFile(outFile.Name())
 		tail, _ := os.ReadFile(startLog)
-		return fmt.Errorf("embedded database did not start: %w: %s %s", err, strings.TrimSpace(out.String()), lastLines(string(tail), 6))
+		return fmt.Errorf("embedded database did not start: %w: %s %s", err, strings.TrimSpace(string(out)), lastLines(string(tail), 6))
 	}
 	deadline := time.Now().Add(60 * time.Second)
 	for {
@@ -277,6 +291,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	cmd := exec.Command(s.exe("pg_ctl"), "stop", "-D", s.DataDir, "-m", "fast", "-w", "-t", "60", "-s")
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
+	cmd.WaitDelay = 5 * time.Second
 	hideWindow(cmd)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("stop embedded database: %w: %s", err, strings.TrimSpace(out.String()))

@@ -35,6 +35,8 @@ dependencies are rejected; MPL/EPL/CDDL require explicit review.
 | go | go.yaml.in/yaml/v4 | v4.0.0-rc.2 | Apache-2.0 | ok |
 | go | golang.org/x/crypto | v0.57.0 | BSD-3-Clause | ok |
 | go | golang.org/x/sync | v0.23.0 | BSD-3-Clause | ok |
+| go | golang.org/x/sys | v0.48.0 | BSD-3-Clause | ok |
+| go | golang.org/x/term | v0.46.0 | BSD-3-Clause | ok |
 | go | golang.org/x/text | v0.42.0 | BSD-3-Clause | ok |
 | npm | @tanstack/query-core | 5.104.0 | MIT | ok |
 | npm | @tanstack/react-query | 5.104.0 | MIT | ok |
@@ -72,3 +74,13 @@ dependencies are rejected; MPL/EPL/CDDL require explicit review.
 | npm | set-cookie-parser | 2.7.2 | MIT | ok |
 | npm | use-sync-external-store | 1.7.0 | MIT | ok |
 | npm | zustand | 4.5.7 | MIT | ok |
+
+## Windows installer: bundled binaries
+
+The Windows installer additionally ships the unmodified PostgreSQL 16 server binaries and
+the libraries they load (PostgreSQL License, ICU/Unicode, OpenSSL/Apache-2.0, zlib, MIT,
+BSD, LGPL-2.1 for GNU gettext's libintl and GNU libiconv as separate DLLs) and the
+Microsoft Visual C++ runtime DLLs (Microsoft redistributable code). Their license texts
+are installed in `licenses\` next to `nexus.exe`; the list is in
+[deployments/windows/licenses/BUNDLED.txt](../deployments/windows/licenses/BUNDLED.txt).
+Versions and checksums are pinned in `deployments/windows/deps.env`.

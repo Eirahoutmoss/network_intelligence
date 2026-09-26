@@ -95,10 +95,17 @@ func main() {
 		}
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		var rep reportedError
+		if !errors.As(err, &rep) {
+			fmt.Fprintln(os.Stderr, "error:", err)
+		}
 		os.Exit(1)
 	}
 }
+
+// reportedError is an error the command already showed to the user (for
+// example in the installer window); main only sets the exit code.
+type reportedError struct{ error }
 
 // configFlag extracts "--config PATH" / "--config=PATH" from args.
 func configFlag(args []string) ([]string, string) {

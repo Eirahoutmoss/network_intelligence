@@ -136,3 +136,20 @@ Every answer lists how the question was understood and the data source.
   touching collectors.
 - Discovery runs are processed one at a time; devices within a run are collected in
   parallel (default 4) and network-wide derivation is serialized.
+
+## Deployment layer
+
+Installation concerns are kept out of the discovery and inventory code:
+
+| Package | Role |
+|---|---|
+| `internal/pgembed` | runs a private PostgreSQL (initdb, start/stop via `pg_ctl`, free-port fallback, attach to a running instance) for single-host installs |
+| `internal/backup` | `pg_dump`-free logical backups and restores (zip of COPY streams + manifest, key fingerprint, optional wrapped key, credential re-encryption) |
+| `internal/diag` | health checks and redacted diagnostic bundles |
+| `internal/deploy` | installation layout, secret generation, configuration, preflight checks, port selection, health verification, structured install log; Windows service, ACLs and firewall rule (`*_windows.go`) |
+| `internal/platform` | operating-system facts (Windows version, service state, disk space) |
+| `cmd/nexus/platform_windows.go` | Windows commands: `service run` (SCM), `install`, `uninstall`, `preflight`, `open`, `diagnostics --gui` |
+
+The same `nexus` binary serves Docker, Linux and Windows; on Windows it is additionally
+its own service host and installer helper (`deployments/windows/installer.nsi` only copies
+files, asks questions and shows progress).
