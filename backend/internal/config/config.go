@@ -45,6 +45,51 @@ type Config struct {
 	// structured filters; answers always come from the database.
 	AnthropicAPIKey string
 	LLMModel        string
+
+	// Embedded PostgreSQL (Windows installer / single-host installs). When
+	// PGData is set and no NEXUS_DATABASE_URL is given, Nexus runs its own
+	// PostgreSQL bound to 127.0.0.1.
+	PGBin      string // directory with initdb, pg_ctl, postgres
+	PGData     string
+	PGPort     int // preferred port; another free one is used when taken
+	PGPassword string
+
+	LogFile   string // also write logs here (rotated); empty = stdout only
+	BackupDir string // automatic pre-migration backups; empty = off
+	// FirstRunSetup lets the first administrator be created from the web UI,
+	// only from the local machine ("local"). No password is generated or logged.
+	FirstRunSetup string
+}
+
+// Embedded reports whether Nexus manages its own PostgreSQL.
+func (c *Config) Embedded() bool { return c.PGData != "" && c.DatabaseURL == "" }
+
+// LoadFile reads KEY=VALUE lines (blank lines and # comments ignored,
+// optional quotes) and sets environment variables that are not already set,
+// so the environment always wins over the file.
+func LoadFile(path string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read config %s: %w", path, err)
+	}
+	for i, line := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "\ufeff"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			return fmt.Errorf("%s:%d: expected KEY=VALUE", path, i+1)
+		}
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if len(v) >= 2 && (v[0] == '"' && v[len(v)-1] == '"' || v[0] == '\'' && v[len(v)-1] == '\'') {
+			v = v[1 : len(v)-1]
+		}
+		if _, set := os.LookupEnv(k); !set {
+			os.Setenv(k, v)
+		}
+	}
+	return nil
 }
 
 func getenv(key, def string) string {
@@ -122,6 +167,11 @@ func Load() (*Config, error) {
 		SimulatorListen: getenv("NEXUS_SIMULATOR", ""),
 		LLMModel:        getenv("NEXUS_LLM_MODEL", "claude-opus-5"),
 		CookieSecure:    getenv("NEXUS_COOKIE_SECURE", "false") == "true",
+		PGBin:           getenv("NEXUS_PG_BIN", ""),
+		PGData:          getenv("NEXUS_PG_DATA", ""),
+		LogFile:         getenv("NEXUS_LOG_FILE", ""),
+		BackupDir:       getenv("NEXUS_BACKUP_DIR", ""),
+		FirstRunSetup:   getenv("NEXUS_FIRST_RUN_SETUP", ""),
 	}
 	var err error
 	if c.DatabaseURL == "" {
@@ -129,8 +179,18 @@ func Load() (*Config, error) {
 			return nil, err
 		}
 	}
-	if c.DatabaseURL == "" {
-		return nil, errors.New("NEXUS_DATABASE_URL is required")
+	if c.PGPort, err = integer("NEXUS_PG_PORT", 54329); err != nil {
+		return nil, err
+	}
+	if c.Embedded() {
+		if c.PGPassword, err = secret("NEXUS_PG_PASSWORD"); err != nil {
+			return nil, err
+		}
+		if c.PGPassword == "" {
+			return nil, errors.New("NEXUS_PG_PASSWORD (or NEXUS_PG_PASSWORD_FILE) is required for the embedded database")
+		}
+	} else if c.DatabaseURL == "" {
+		return nil, errors.New("NEXUS_DATABASE_URL is required (or NEXUS_PG_DATA for the embedded database)")
 	}
 	mk, err := secret("NEXUS_MASTER_KEY")
 	if err != nil {

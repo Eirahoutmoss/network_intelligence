@@ -23,6 +23,7 @@ import (
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/auth"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/cli"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/credentials"
+	"github.com/Eirahoutmoss/network_intelligence/backend/internal/diag"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/discovery"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/explorer"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/inventory"
@@ -31,6 +32,12 @@ import (
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/settings"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/storage"
 )
+
+// Diagnostics runs health checks and builds redacted diagnostic bundles.
+type Diagnostics interface {
+	Run(ctx context.Context) []diag.Check
+	Bundle(ctx context.Context, w io.Writer) error
+}
 
 // Version is set at build time.
 var Version = "dev"
@@ -51,6 +58,11 @@ type Server struct {
 	WebDir    string
 	Simulator bool
 	LLM       bool
+	// FirstRunSetup allows creating the first administrator from the local machine.
+	FirstRunSetup bool
+	Diagnostics   Diagnostics
+	// Backup writes a backup; passphrase optionally wraps the master key into it.
+	Backup func(ctx context.Context, w io.Writer, passphrase string) error
 }
 
 // Router builds the HTTP handler.
@@ -67,6 +79,8 @@ func (s *Server) Router() http.Handler {
 		r.Use(limitBody, csrfGuard)
 		r.Post("/auth/login", s.login)
 		r.Post("/auth/logout", s.logout)
+		r.Get("/setup", s.setupStatus)
+		r.Post("/setup", s.setup)
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAuth)
@@ -148,6 +162,9 @@ func (s *Server) Router() http.Handler {
 				r.Post("/cli-sessions/{id}/terminate", s.terminateCLI)
 				r.Get("/settings", s.getSettings)
 				r.Put("/settings", s.putSettings)
+				r.Get("/admin/diagnostics", s.runDiagnostics)
+				r.Get("/admin/diagnostics/bundle", s.diagnosticsBundle)
+				r.Post("/admin/backup", s.downloadBackup)
 			})
 		})
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) { writeError(w, http.StatusNotFound, "not found") })

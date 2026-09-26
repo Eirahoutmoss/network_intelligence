@@ -114,6 +114,48 @@ func (s *Service) Bootstrap(ctx context.Context, username, password string) erro
 	return nil
 }
 
+// UserCount returns the number of accounts.
+func (s *Service) UserCount(ctx context.Context) (int, error) {
+	var n int
+	err := s.DB.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&n)
+	return n, err
+}
+
+// ErrSetupDone is returned when an administrator already exists.
+var ErrSetupDone = errors.New("setup already completed")
+
+// CreateFirstAdmin creates the first administrator only while no account
+// exists. Concurrent attempts are serialized; exactly one can succeed.
+func (s *Service) CreateFirstAdmin(ctx context.Context, username, password string) (int64, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return 0, errors.New("username is required")
+	}
+	if len(password) < 10 {
+		return 0, errors.New("administrator password must be at least 10 characters")
+	}
+	h, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return 0, err
+	}
+	var id int64
+	err = pgx.BeginFunc(ctx, s.DB.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `LOCK TABLE users IN EXCLUSIVE MODE`); err != nil {
+			return err
+		}
+		var n int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			return ErrSetupDone
+		}
+		return tx.QueryRow(ctx, `INSERT INTO users(username,password_hash,role) VALUES ($1,$2,$3) RETURNING id`,
+			username, string(h), RoleAdmin).Scan(&id)
+	})
+	return id, err
+}
+
 func validatePassword(p string) error {
 	if len(p) < 8 {
 		return errors.New("password must be at least 8 characters")

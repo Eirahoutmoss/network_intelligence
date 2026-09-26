@@ -1,7 +1,12 @@
 // Command nexus runs the Network Intelligence Platform server.
 //
+//	nexus [--config FILE] COMMAND
+//
 //	nexus            start the server (default)
 //	nexus migrate    apply database migrations and exit
+//	nexus backup     write a backup file
+//	nexus restore    restore a backup file (server must be stopped)
+//	nexus diagnostics write a redacted diagnostic bundle
 //	nexus lab-export DIR   write the simulated lab as snmprec fixtures
 //	nexus version
 package main
@@ -10,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -31,7 +37,9 @@ import (
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/inventory"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/lab"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/locations"
+	"github.com/Eirahoutmoss/network_intelligence/backend/internal/logfile"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/metrics"
+	"github.com/Eirahoutmoss/network_intelligence/backend/internal/pgembed"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/scheduler"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/settings"
 	"github.com/Eirahoutmoss/network_intelligence/backend/internal/snmp"
@@ -42,26 +50,49 @@ import (
 var version = "dev"
 
 func main() {
+	args, cfgPath := configFlag(os.Args[1:])
+	if cfgPath == "" {
+		cfgPath = os.Getenv("NEXUS_CONFIG")
+	}
+	if cfgPath != "" {
+		if err := config.LoadFile(cfgPath); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	}
 	cmd := "serve"
-	if len(os.Args) > 1 {
-		cmd = os.Args[1]
+	if len(args) > 0 {
+		cmd = args[0]
+		args = args[1:]
 	}
 	var err error
 	switch cmd {
 	case "serve":
-		err = serve()
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		err = serve(ctx, nil)
+		stop()
 	case "migrate":
 		err = migrateOnly()
+	case "backup":
+		err = backupCommand(args)
+	case "restore":
+		err = restoreCommand(args)
+	case "diagnostics":
+		err = diagnosticsCommand(args)
 	case "lab-export":
-		if len(os.Args) < 3 {
+		if len(args) < 1 {
 			err = errors.New("usage: nexus lab-export DIR")
 		} else {
-			err = labExport(os.Args[2])
+			err = labExport(args[0])
 		}
 	case "version", "--version", "-v":
 		fmt.Println("nexus", version)
 	default:
-		err = fmt.Errorf("unknown command %q", cmd)
+		var handled bool
+		handled, err = platformCommand(cmd, args)
+		if !handled {
+			err = fmt.Errorf("unknown command %q", cmd)
+		}
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -69,14 +100,46 @@ func main() {
 	}
 }
 
-func newLogger(level, format string) *slog.Logger {
+// configFlag extracts "--config PATH" / "--config=PATH" from args.
+func configFlag(args []string) ([]string, string) {
+	var out []string
+	path := ""
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--config" && i+1 < len(args):
+			path = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--config="):
+			path = strings.TrimPrefix(a, "--config=")
+		default:
+			out = append(out, a)
+		}
+	}
+	return out, path
+}
+
+// quietWriter ignores write errors (a Windows service has no console).
+type quietWriter struct{ w io.Writer }
+
+func (q quietWriter) Write(p []byte) (int, error) {
+	_, _ = q.w.Write(p)
+	return len(p), nil
+}
+
+func newLogger(level, format string, extra ...io.Writer) *slog.Logger {
 	var lvl slog.Level
 	_ = lvl.UnmarshalText([]byte(level))
 	opts := &slog.HandlerOptions{Level: lvl}
-	if format == "text" {
-		return slog.New(slog.NewTextHandler(os.Stdout, opts))
+	ws := []io.Writer{quietWriter{os.Stdout}}
+	for _, w := range extra {
+		ws = append(ws, quietWriter{w})
 	}
-	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+	out := io.MultiWriter(ws...)
+	if format == "text" {
+		return slog.New(slog.NewTextHandler(out, opts))
+	}
+	return slog.New(slog.NewJSONHandler(out, opts))
 }
 
 func migrateOnly() error {
@@ -85,12 +148,71 @@ func migrateOnly() error {
 		return err
 	}
 	log := newLogger(cfg.LogLevel, cfg.LogFormat)
-	db, err := storage.Open(context.Background(), cfg.DatabaseURL, log)
+	ctx := context.Background()
+	db, done, err := openDatabase(ctx, cfg, log)
 	if err != nil {
 		return err
 	}
-	defer db.Close()
-	return db.Migrate(context.Background(), log)
+	defer done()
+	return db.Migrate(ctx, log)
+}
+
+// openDatabase connects to the configured database, starting the embedded
+// PostgreSQL first when configured. done closes the pool and stops the
+// embedded server.
+//
+// With attach, a running embedded server (owned by the service) is used as is
+// and left running.
+func openDatabase(ctx context.Context, cfg *config.Config, log *slog.Logger, attach ...bool) (*storage.DB, func(), error) {
+	var pg *pgembed.Server
+	url := cfg.DatabaseURL
+	if cfg.Embedded() {
+		pg = embeddedServer(cfg, log)
+		attached := false
+		if len(attach) > 0 && attach[0] {
+			ok, err := pg.Attach(ctx)
+			if err != nil {
+				return nil, nil, fmt.Errorf("connect to the running embedded database: %w", err)
+			}
+			attached = ok
+		}
+		if attached {
+			url = pg.URL("nexus")
+			pg = nil // not ours to stop
+		} else if err := pg.Start(ctx); err != nil {
+			return nil, nil, err
+		}
+	}
+	if pg != nil {
+		if err := pg.EnsureDatabase(ctx, "nexus"); err != nil {
+			_ = pg.Stop(context.Background())
+			return nil, nil, err
+		}
+		url = pg.URL("nexus")
+	}
+	db, err := storage.Open(ctx, url, log)
+	if err != nil {
+		if pg != nil {
+			_ = pg.Stop(context.Background())
+		}
+		return nil, nil, err
+	}
+	return db, func() {
+		db.Close()
+		if pg != nil {
+			if err := pg.Stop(context.Background()); err != nil {
+				log.Error("stopping embedded database", "err", err)
+			}
+		}
+	}, nil
+}
+
+func embeddedServer(cfg *config.Config, log *slog.Logger) *pgembed.Server {
+	logDir := ""
+	if cfg.LogFile != "" {
+		logDir = filepath.Dir(cfg.LogFile)
+	}
+	return &pgembed.Server{BinDir: cfg.PGBin, DataDir: cfg.PGData, LogDir: logDir, Port: cfg.PGPort, Password: cfg.PGPassword, Log: log}
 }
 
 func labExport(dir string) error {
@@ -113,32 +235,54 @@ func labExport(dir string) error {
 	return nil
 }
 
-func serve() error {
+// serve runs the server until ctx is cancelled. ready, when set, is called
+// once the HTTP listener accepts connections.
+func serve(ctx context.Context, ready func(addr string)) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
 	api.Version = version
-	log := newLogger(cfg.LogLevel, cfg.LogFormat)
+	var extra []io.Writer
+	if cfg.LogFile != "" {
+		lf, err := logfile.Open(cfg.LogFile, 20<<20, 5)
+		if err != nil {
+			return fmt.Errorf("open log file: %w", err)
+		}
+		defer lf.Close()
+		extra = append(extra, lf)
+	}
+	log := newLogger(cfg.LogLevel, cfg.LogFormat, extra...)
 	slog.SetDefault(log)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 
-	db, err := storage.Open(ctx, cfg.DatabaseURL, log)
+	db, closeDB, err := openDatabase(ctx, cfg, log)
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer closeDB()
+	if cfg.Embedded() {
+		go watchEmbedded(ctx, cancel, embeddedServer(cfg, log), db, log)
+	}
+	if err := backupBeforeMigrate(ctx, cfg, db, log); err != nil {
+		return err
+	}
 	if err := db.Migrate(ctx, log); err != nil {
 		return err
 	}
+	go autoBackups(ctx, cfg, db, log, 7)
 	sealer, err := credentials.NewSealer(cfg.MasterKey)
 	if err != nil {
 		return err
 	}
 	creds := credentials.NewStore(db, sealer)
 	authSvc := &auth.Service{DB: db, TTL: cfg.SessionTTL, Secure: cfg.CookieSecure, Log: log}
-	if err := authSvc.Bootstrap(ctx, cfg.AdminUser, cfg.AdminPass); err != nil {
+	if cfg.FirstRunSetup == "local" && cfg.AdminPass == "" {
+		if n, err := authSvc.UserCount(ctx); err == nil && n == 0 {
+			log.Info("no users yet: create the administrator from the web UI on this computer")
+		}
+	} else if err := authSvc.Bootstrap(ctx, cfg.AdminUser, cfg.AdminPass); err != nil {
 		return err
 	}
 	reg := metrics.New()
@@ -182,7 +326,7 @@ func serve() error {
 			return err
 		}
 		log.Warn("SIMULATOR MODE: simulated campus network is active",
-			"seed_ip", "10.20.99.1", "snmp_username", l.V3User, "snmp_password", l.V3Pass, "agents", len(running.Addrs))
+			"seed_ip", "10.20.99.1", "snmp_username", l.V3User, "agents", len(running.Addrs))
 	}
 
 	collector := &discovery.Collector{Dialer: dialer, Registry: all.Registry(), Log: log}
@@ -206,13 +350,21 @@ func serve() error {
 	srv := &api.Server{DB: db, Auth: authSvc, Creds: creds, Store: store, Engine: engine,
 		Explorer:  &explorer.Explorer{Store: store, LLM: llm, Log: log},
 		Locations: &locations.Service{DB: db}, CLI: cliSvc, Settings: settingsSvc, Metrics: reg, Log: log,
-		WebDir: cfg.WebDir, Simulator: cfg.SimulatorListen != "", LLM: llm != nil}
+		WebDir: cfg.WebDir, Simulator: cfg.SimulatorListen != "", LLM: llm != nil,
+		FirstRunSetup: cfg.FirstRunSetup == "local", Diagnostics: newDiagnostics(cfg, db, creds), Backup: backupFunc(cfg, db)}
 	httpSrv := &http.Server{Addr: cfg.ListenAddr, Handler: srv.Router(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
+	ln, err := net.Listen("tcp", cfg.ListenAddr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w (another program is using this port; change NEXUS_LISTEN)", cfg.ListenAddr, err)
+	}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("listening", "addr", cfg.ListenAddr, "version", version, "web_dir", cfg.WebDir)
-		errCh <- httpSrv.ListenAndServe()
+		log.Info("listening", "addr", cfg.ListenAddr, "version", version, "web_dir", cfg.WebDir, "embedded_db", cfg.Embedded())
+		errCh <- httpSrv.Serve(ln)
 	}()
+	if ready != nil {
+		ready(ln.Addr().String())
+	}
 	select {
 	case <-ctx.Done():
 		log.Info("shutting down")
@@ -221,9 +373,48 @@ func serve() error {
 			return err
 		}
 	}
-	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
+		shutCtx, c := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = httpSrv.Shutdown(shutCtx)
+		c()
+		return cause
+	}
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutCancel()
 	return httpSrv.Shutdown(shutCtx)
+}
+
+// watchEmbedded stops the server when the embedded database dies, so the
+// service manager restarts everything together. A database is declared dead
+// only when it stops answering and pg_ctl confirms it is not running.
+func watchEmbedded(ctx context.Context, cancel context.CancelCauseFunc, pg *pgembed.Server, db *storage.DB, log *slog.Logger) {
+	failures := 0
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		pctx, c := context.WithTimeout(ctx, 5*time.Second)
+		err := db.Ping(pctx)
+		c()
+		if err == nil || ctx.Err() != nil {
+			failures = 0
+			continue
+		}
+		if !pg.Stopped(ctx) {
+			log.Warn("embedded database not answering", "err", err)
+			continue
+		}
+		failures++
+		log.Error("embedded database is not running", "checks_failed", failures)
+		if failures >= 2 {
+			cancel(errors.New("embedded database stopped unexpectedly; see postgres logs"))
+			return
+		}
+	}
 }
 
 func registerGauges(reg *metrics.Registry, db *storage.DB) {
