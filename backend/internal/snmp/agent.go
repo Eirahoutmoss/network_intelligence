@@ -18,6 +18,9 @@ import (
 type Agent struct {
 	MIB       *MIB
 	Community string
+	// Contexts holds per-context MIBs (e.g. "vlan-10"), reachable with v2c
+	// community "public@10" (Cisco style) or v3 contextName "vlan-10".
+	Contexts map[string]*MIB
 	// V3Users enables SNMPv3 (noAuthNoPriv / authNoPriv). Privacy is not simulated.
 	V3Users map[string]V3User
 	Log     *slog.Logger
@@ -76,8 +79,12 @@ func (a *Agent) Serve(ctx context.Context) error {
 		if err != nil || pkt.Version == gosnmp.Version3 {
 			continue
 		}
-		if a.Community != "" && pkt.Community != a.Community {
+		community, vctx, _ := strings.Cut(pkt.Community, "@")
+		if a.Community != "" && community != a.Community {
 			continue // like real agents: silently drop wrong community
+		}
+		if vctx != "" {
+			pkt.ContextName = "vlan-" + vctx
 		}
 		resp := a.handle(pkt)
 		if resp == nil {
@@ -123,7 +130,18 @@ func (a *Agent) toWire(p PDU, name string) gosnmp.SnmpPDU {
 	return w
 }
 
+func (a *Agent) mibFor(contextName string) *MIB {
+	if contextName == "" {
+		return a.MIB
+	}
+	if m, ok := a.Contexts[contextName]; ok {
+		return m
+	}
+	return NewMIB()
+}
+
 func (a *Agent) handle(req *gosnmp.SnmpPacket) *gosnmp.SnmpPacket {
+	mib := a.mibFor(req.ContextName)
 	resp := &gosnmp.SnmpPacket{
 		Version:   req.Version,
 		Community: req.Community,
@@ -141,7 +159,7 @@ func (a *Agent) handle(req *gosnmp.SnmpPacket) *gosnmp.SnmpPacket {
 	switch req.PDUType {
 	case gosnmp.GetRequest:
 		for _, n := range names {
-			if p, ok := a.MIB.Lookup(n); ok {
+			if p, ok := mib.Lookup(n); ok {
 				resp.Variables = append(resp.Variables, a.toWire(p, n))
 			} else {
 				resp.Variables = append(resp.Variables, gosnmp.SnmpPDU{Name: "." + n, Type: gosnmp.NoSuchObject})
@@ -149,7 +167,7 @@ func (a *Agent) handle(req *gosnmp.SnmpPacket) *gosnmp.SnmpPacket {
 		}
 	case gosnmp.GetNextRequest:
 		for _, n := range names {
-			if p, ok := a.MIB.Next(n); ok {
+			if p, ok := mib.Next(n); ok {
 				resp.Variables = append(resp.Variables, a.toWire(p, p.OID))
 			} else {
 				resp.Variables = append(resp.Variables, endOfMib(n))
@@ -161,7 +179,7 @@ func (a *Agent) handle(req *gosnmp.SnmpPacket) *gosnmp.SnmpPacket {
 			nr = len(names)
 		}
 		for _, n := range names[:nr] {
-			if p, ok := a.MIB.Next(n); ok {
+			if p, ok := mib.Next(n); ok {
 				resp.Variables = append(resp.Variables, a.toWire(p, p.OID))
 			} else {
 				resp.Variables = append(resp.Variables, endOfMib(n))
@@ -178,7 +196,7 @@ func (a *Agent) handle(req *gosnmp.SnmpPacket) *gosnmp.SnmpPacket {
 		for r := 0; r < reps && len(cursors) > 0; r++ {
 			allEnd := true
 			for i, c := range cursors {
-				if p, ok := a.MIB.Next(c); ok {
+				if p, ok := mib.Next(c); ok {
 					resp.Variables = append(resp.Variables, a.toWire(p, p.OID))
 					cursors[i] = p.OID
 					allEnd = false
