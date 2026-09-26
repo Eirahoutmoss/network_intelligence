@@ -49,6 +49,32 @@ export const api = {
   del: <T>(path: string) => request<T>('DELETE', path),
 }
 
+// download fetches a file (with the CSRF header and session cookie) and saves it.
+export async function download(method: 'GET' | 'POST', path: string, fallbackName: string, body?: unknown): Promise<void> {
+  const headers: Record<string, string> = { 'X-Requested-With': 'nexus' }
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin' })
+  if (!res.ok) {
+    let msg = res.statusText
+    try {
+      msg = (await res.json()).error || msg
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(res.status, msg)
+  }
+  const cd = res.headers.get('Content-Disposition') || ''
+  const name = /filename="([^"]+)"/.exec(cd)?.[1] || fallbackName
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
 export function qs(params: Record<string, string | number | boolean | undefined | null>): string {
   const u = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {

@@ -6,16 +6,18 @@ import type { Credential, Settings as SettingsT, User } from '@/api/types'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Loading, Modal, PageHeader, Select, Table, Tabs, Td, Th } from '@/components/ui'
 import { ago, dateTime } from '@/lib/format'
 import { useAuth } from '@/lib/auth'
+import { About, Maintenance } from './Maintenance'
 
-type Tab = 'credentials' | 'discovery' | 'users' | 'audit' | 'cli' | 'account'
+type Tab = 'credentials' | 'discovery' | 'users' | 'audit' | 'cli' | 'maintenance' | 'account' | 'about'
 
 export default function Settings() {
   const { can } = useAuth()
   const [tab, setTab] = useState<Tab>(can('operator') ? 'credentials' : 'account')
   const tabs: { id: Tab; label: string }[] = [
     ...(can('operator') ? [{ id: 'credentials' as Tab, label: 'Credentials' }] : []),
-    ...(can('admin') ? [{ id: 'discovery' as Tab, label: 'Discovery & security' }, { id: 'users' as Tab, label: 'Users' }, { id: 'audit' as Tab, label: 'Audit log' }, { id: 'cli' as Tab, label: 'CLI sessions' }] : []),
+    ...(can('admin') ? [{ id: 'discovery' as Tab, label: 'Discovery & security' }, { id: 'users' as Tab, label: 'Users' }, { id: 'audit' as Tab, label: 'Audit log' }, { id: 'cli' as Tab, label: 'CLI sessions' }, { id: 'maintenance' as Tab, label: 'Diagnostics & backup' }] : []),
     { id: 'account', label: 'My account' },
+    { id: 'about', label: 'About' },
   ]
   return (
     <div className="p-6">
@@ -27,7 +29,9 @@ export default function Settings() {
         {tab === 'users' && <Users />}
         {tab === 'audit' && <Audit />}
         {tab === 'cli' && <CLISessions />}
+        {tab === 'maintenance' && <Maintenance />}
         {tab === 'account' && <Account />}
+        {tab === 'about' && <About />}
       </div>
     </div>
   )

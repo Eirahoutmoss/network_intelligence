@@ -7,6 +7,7 @@ interface AuthState {
   loading: boolean
   info: { version: string; simulator: boolean; llm: boolean } | null
   login: (u: string, p: string) => Promise<void>
+  setup: (u: string, p: string) => Promise<void>
   logout: () => Promise<void>
   can: (r: Role) => boolean
 }
@@ -41,12 +42,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(r.user)
     setInfo(await api.get('/api/info'))
   }
+  const setup = async (username: string, password: string) => {
+    const r = await api.post<{ user: User }>('/api/setup', { username, password })
+    setUser(r.user)
+    setInfo(await api.get('/api/info'))
+  }
   const logout = async () => {
     await api.post('/api/auth/logout').catch(() => undefined)
     setUser(null)
   }
   const can = (r: Role) => !!user && rank[user.role] >= rank[r]
-  return <Ctx.Provider value={{ user, loading, info, login, logout, can }}>{children}</Ctx.Provider>
+  return <Ctx.Provider value={{ user, loading, info, login, setup, logout, can }}>{children}</Ctx.Provider>
 }
 
 export function useAuth() {
