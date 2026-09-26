@@ -54,10 +54,10 @@ func (c *Collector) Collect(ctx context.Context, host string, cred credentials.S
 	if err := cred.Normalize(); err != nil {
 		return nil, err
 	}
-	step("connect", "Connecting to "+host, "running", "")
+	step("reachable", "Connecting to "+host, "running", "")
 	client, err := c.Dialer.Dial(ctx, host, cred)
 	if err != nil {
-		step("connect", "Connecting to "+host, "failed", err.Error())
+		step("reachable", "Connecting to "+host, "failed", err.Error())
 		if errors.Is(err, snmp.ErrTimeout) {
 			return nil, fmt.Errorf("%w: %v", ErrUnreachable, err)
 		}
