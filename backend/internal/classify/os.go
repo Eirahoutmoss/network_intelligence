@@ -109,7 +109,7 @@ func windowsName(ver string, build int, server bool) string {
 
 var (
 	reWinSysDescr = regexp.MustCompile(`(?i)Software:\s*Windows.*?Version\s+([\d.]+)\s*\(Build\s+(\d+)`)
-	reSMBWin      = regexp.MustCompile(`(?i)^Windows\s+(\d+\.\d+)$`)
+	reSMBWin      = regexp.MustCompile(`(?i)^Windows\s+(\d+\.\d+)(?:\s+Build\s+(\d+))?$`)
 	reSMBName     = regexp.MustCompile(`(?i)Windows\s+(XP|2000|Vista|7|8\.1|8|10|11|Server\s+\d{4}(?:\s+R2)?)`)
 	reLinuxKernel = regexp.MustCompile(`(?i)\bLinux\s+\S+\s+(\d+\.\d+[\w.\-]*)`)
 	reIIS         = regexp.MustCompile(`(?i)Microsoft-IIS/(\d+\.\d+)`)
@@ -159,10 +159,13 @@ func OS(f Facts) Result {
 		}
 	}
 	// SMB negotiate / session setup native OS string
-	if n := strings.TrimSpace(o.SMBNativeOS); n != "" {
+	if strings.Contains(lower(o.SMBLanMan), "samba") {
+		s.add("", FamLinux, "SMB", "Samba file server ("+o.SMBLanMan+")", 0.8)
+	} else if n := strings.TrimSpace(o.SMBNativeOS); n != "" {
 		server := strings.Contains(lower(n), "server")
 		if m := reSMBWin.FindStringSubmatch(n); m != nil {
-			if name := windowsName(m[1], 0, server); name != "" {
+			build, _ := strconv.Atoi(m[2])
+			if name := windowsName(m[1], build, server); name != "" {
 				s.add(name, FamWindows, "SMB", "native OS \""+n+"\"", 0.8)
 			}
 		} else if m := reSMBName.FindStringSubmatch(n); m != nil {
@@ -176,8 +179,8 @@ func OS(f Facts) Result {
 		s.add("", FamWindows, "SMB", "only SMB1 dialect offered (legacy Windows/NT)", 0.35)
 	case "SMB 2.1":
 		s.add("Windows 7", FamWindows, "SMB", "SMB 2.1 dialect (Windows 7 / 2008 R2 era)", 0.25)
-	case "SMB 3.1.1":
-		s.add("Windows 10/11", FamWindows, "SMB", "SMB 3.1.1 dialect (Windows 10 / Server 2016+)", 0.3)
+	case "SMB 3.1.1", "SMB 3.0.2":
+		s.add("", FamWindows, "SMB", o.SMBDialect+" dialect (Windows 8.1 / Server 2012 R2 or newer)", 0.3)
 	}
 	if o.NetBIOSName != "" && (o.HasPort(139) || o.HasPort(445)) {
 		s.add("", FamWindows, "NetBIOS", "NetBIOS name "+o.NetBIOSName+" with SMB ports open", 0.55)

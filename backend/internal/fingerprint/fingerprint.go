@@ -27,6 +27,7 @@ type Observation struct {
 	NetBIOSGroup   string   `json:"netbios_group,omitempty"`
 	SMBNativeOS    string   `json:"smb_native_os,omitempty"`
 	SMBDialect     string   `json:"smb_dialect,omitempty"`
+	SMBLanMan      string   `json:"smb_lanman,omitempty"`
 	HTTPServer     string   `json:"http_server,omitempty"`
 	HTTPTitle      string   `json:"http_title,omitempty"`
 	OpenPorts      []int    `json:"open_ports,omitempty"`
