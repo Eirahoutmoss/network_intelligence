@@ -175,6 +175,12 @@ func serve() error {
 		if err != nil {
 			return err
 		}
+		// The simulated network is ours to probe: enable active identification by default.
+		demo := settings.Defaults()
+		demo.ActiveFingerprinting = true
+		if err := settingsSvc.EnsureDefaults(ctx, demo); err != nil {
+			return err
+		}
 		log.Warn("SIMULATOR MODE: simulated campus network is active",
 			"seed_ip", "10.20.99.1", "snmp_username", l.V3User, "snmp_password", l.V3Pass, "agents", len(running.Addrs))
 	}

@@ -13,3 +13,4 @@ coverage.out
 *.key
 /data/
 .DS_Store
+/tests/e2e/.shots/
