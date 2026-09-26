@@ -26,6 +26,8 @@ type System struct {
 	IsPrinter     bool     `json:"is_printer"` // Printer-MIB/HOST-RESOURCES says so
 	IsBridge      bool     `json:"is_bridge"`  // BRIDGE-MIB present
 	IsRouter      bool     `json:"is_router"`  // ipForwarding = forwarding
+	STPRoot       string   `json:"stp_root"`   // designated root bridge id (priority/MAC)
+	STPRootPort   int      `json:"stp_root_port"`
 }
 
 // Interface is a port or logical interface.
@@ -50,6 +52,8 @@ type Interface struct {
 	LastChangeSeconds int64  `json:"last_change_seconds"`
 	// BridgePort is the dot1dBasePort number mapping to this ifIndex (0 = none).
 	BridgePort int `json:"bridge_port"`
+	// STPState is the spanning-tree state (forwarding, blocking, ...) or "".
+	STPState string `json:"stp_state"`
 }
 
 // Physical returns true for ethernet-like physical ports.

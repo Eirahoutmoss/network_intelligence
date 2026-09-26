@@ -71,6 +71,7 @@ CREATE TABLE devices (
     cpu_percent          DOUBLE PRECISION,
     memory_percent       DOUBLE PRECISION,
     chassis_id           TEXT,
+    stp_root             TEXT,
     managed              BOOLEAN NOT NULL DEFAULT FALSE,  -- polled via SNMP
     is_router            BOOLEAN NOT NULL DEFAULT FALSE,
     is_bridge            BOOLEAN NOT NULL DEFAULT FALSE,
@@ -174,6 +175,7 @@ CREATE TABLE interfaces (
     out_bps       DOUBLE PRECISION,
     last_change_seconds BIGINT,
     is_uplink     BOOLEAN NOT NULL DEFAULT FALSE,
+    stp_state     TEXT,
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (device_id, if_index)
 );

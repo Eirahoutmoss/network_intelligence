@@ -214,3 +214,21 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+func TestCollectSTP(t *testing.T) {
+	r, c := startLab(t)
+	snap, err := c.Collect(context.Background(), "10.20.99.11", v3(r.Lab), true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.System.STPRoot != "4096/00:e0:fc:10:00:01" {
+		t.Errorf("stp root %q", snap.System.STPRoot)
+	}
+	up := findIf(snap, "XGigabitEthernet0/0/1")
+	if up == nil || up.STPState != "forwarding" || snap.System.STPRootPort != up.IfIndex {
+		t.Errorf("uplink stp: %+v root port %d", up, snap.System.STPRootPort)
+	}
+	if d := findIf(snap, "GigabitEthernet0/0/48"); d == nil || d.STPState != "disabled" {
+		t.Errorf("down port stp: %+v", d)
+	}
+}

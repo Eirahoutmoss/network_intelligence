@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: nexus
+          POSTGRES_DB: nexus_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U nexus" --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: gofmt
+        working-directory: backend
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: vet
+        working-directory: backend
+        run: go vet ./...
+      - name: net-snmp agent for SNMPv3 interop tests
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q snmpd
+          printf '%s\n' 'createUser prometheus SHA "testpass123"' 'createUser privuser SHA "testpass123" AES "privpass123"' \
+            'rouser prometheus auth' 'rouser privuser priv' 'sysName nexus-test-agent' > /tmp/snmpd.conf
+          sudo snmpd -C -c /tmp/snmpd.conf -p /tmp/snmpd.pid udp:127.0.0.1:16161
+      - name: test
+        working-directory: backend
+        env:
+          NEXUS_TEST_DATABASE_URL: postgres://nexus:nexus@127.0.0.1:5432/nexus_test?sslmode=disable
+          NEXUS_TEST_SNMPD: 127.0.0.1:16161
+        run: go test -p 1 -count=1 ./...
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - working-directory: frontend
+        run: npm ci && npm run typecheck && npm test && npm run build
+
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cd frontend && npm ci
+      - run: python3 scripts/license-audit.py
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: nexus
+          POSTGRES_DB: nexus
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U nexus" --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: build
+        run: |
+          (cd frontend && npm ci && npm run build)
+          (cd backend && go build -o bin/nexus ./cmd/nexus)
+      - name: start demo server
+        run: |
+          cd backend
+          NEXUS_DATABASE_URL=postgres://nexus:nexus@127.0.0.1:5432/nexus?sslmode=disable \
+          NEXUS_MASTER_KEY=$(openssl rand -base64 32) NEXUS_ADMIN_PASSWORD=admin-pass-123 \
+          NEXUS_SIMULATOR=1 NEXUS_WEB_DIR=../frontend/dist NEXUS_LISTEN=127.0.0.1:8080 \
+          nohup ./bin/nexus > /tmp/nexus.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:8080/api/health && break; sleep 1; done
+      - name: playwright
+        working-directory: tests/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test mvp
+      - if: failure()
+        run: cat /tmp/nexus.log

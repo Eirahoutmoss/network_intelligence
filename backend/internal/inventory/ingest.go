@@ -220,14 +220,14 @@ func (s *Store) writeDevice(ctx context.Context, tx pgx.Tx, id int64, snap *mode
 		mgmt_ip=COALESCE($12::inet, mgmt_ip), uptime_seconds=$13, cpu_percent=$14, memory_percent=$15, chassis_id=COALESCE($16, chassis_id),
 		managed=true, status='up', snmp_credential_id=COALESCE($17, snmp_credential_id), vendor_source=COALESCE($18, vendor_source),
 		oui_vendor=COALESCE($20, oui_vendor), hostname=COALESCE(hostname, $2),
-		is_router=$21, is_bridge=$22, is_printer=$23,
+		is_router=$21, is_bridge=$22, is_printer=$23, stp_root=COALESCE($24, stp_root),
 		last_seen=now(), last_polled_at=now(),
 		last_discovered_at=CASE WHEN $19 THEN now() ELSE last_discovered_at END
 		WHERE id=$1`,
 		id, nz(sys.Name), nz(sys.Descr), nz(sys.ObjectID), nz(sys.Contact), nz(sys.Location),
 		nz(sys.Vendor), nz(sys.Model), nz(sys.Serial), nz(strings.TrimSpace(sys.OSName+" "+sys.OSVersion)), nz(sys.HardwareRev),
 		nz(opt.MgmtIP), sys.UptimeSeconds, sys.CPUPercent, sys.MemoryPercent, nz(strings.ToLower(sys.ChassisID)),
-		cred, nz(sys.VendorSource), opt.Full, nz(ouiVendor), sys.IsRouter, sys.IsBridge, sys.IsPrinter)
+		cred, nz(sys.VendorSource), opt.Full, nz(ouiVendor), sys.IsRouter, sys.IsBridge, sys.IsPrinter, nz(sys.STPRoot))
 	if err != nil {
 		return fmt.Errorf("update device: %w", err)
 	}
@@ -329,20 +329,21 @@ func (s *Store) writeInterfaces(ctx context.Context, tx pgx.Tx, devID int64, sna
 		}
 		var ifID int64
 		err := tx.QueryRow(ctx, `INSERT INTO interfaces(device_id, if_index, name, descr, alias, if_type, mtu, speed_bps, mac, admin_status, oper_status,
-				duplex, medium, pvid, in_octets, out_octets, in_errors, out_errors, in_bps, out_bps, last_change_seconds, updated_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,now())
+				duplex, medium, pvid, in_octets, out_octets, in_errors, out_errors, in_bps, out_bps, last_change_seconds, stp_state, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$23,now())
 			ON CONFLICT (device_id, if_index) DO UPDATE SET name=EXCLUDED.name, descr=EXCLUDED.descr, alias=EXCLUDED.alias,
 				if_type=EXCLUDED.if_type, mtu=EXCLUDED.mtu, speed_bps=EXCLUDED.speed_bps, mac=EXCLUDED.mac,
 				admin_status=EXCLUDED.admin_status, oper_status=EXCLUDED.oper_status, duplex=EXCLUDED.duplex,
 				medium=CASE WHEN EXCLUDED.medium='unknown' AND $22 = false THEN interfaces.medium ELSE EXCLUDED.medium END,
 				pvid=COALESCE(EXCLUDED.pvid, interfaces.pvid), in_octets=EXCLUDED.in_octets, out_octets=EXCLUDED.out_octets,
 				in_errors=EXCLUDED.in_errors, out_errors=EXCLUDED.out_errors, in_bps=EXCLUDED.in_bps, out_bps=EXCLUDED.out_bps,
-				last_change_seconds=EXCLUDED.last_change_seconds, updated_at=now()
+				last_change_seconds=EXCLUDED.last_change_seconds,
+				stp_state=CASE WHEN $22 THEN EXCLUDED.stp_state ELSE interfaces.stp_state END, updated_at=now()
 			RETURNING id`,
 			devID, it.IfIndex, nz(it.Name), nz(it.Descr), nz(it.Alias), it.Type, it.MTU, int64(min(it.SpeedBps, 1<<62)), mac,
 			nz(it.AdminStatus), nz(it.OperStatus), it.Duplex, it.Medium, nzi(it.PVID),
 			fmt.Sprint(it.InOctets), fmt.Sprint(it.OutOctets), fmt.Sprint(it.InErrors), fmt.Sprint(it.OutErrors), inBps, outBps,
-			it.LastChangeSeconds, full).Scan(&ifID)
+			it.LastChangeSeconds, full, nz(it.STPState)).Scan(&ifID)
 		if err != nil {
 			return fmt.Errorf("interface %s: %w", it.Name, err)
 		}
@@ -437,6 +438,20 @@ func writeL2L3(ctx context.Context, tx pgx.Tx, devID int64, snap *model.Snapshot
 	// optics
 	b.Queue(`DELETE FROM optics WHERE interface_id IN (SELECT id FROM interfaces WHERE device_id=$1)`, devID)
 	for _, o := range snap.Optics {
+		port := ""
+		if it := snap.InterfaceByIndex(o.IfIndex); it != nil {
+			port = it.Name
+		}
+		// Weak received light on a live link usually means a dirty/damaged fiber or a failing optic.
+		if o.RxDBm != nil && port != "" {
+			if *o.RxDBm < -18 {
+				if events.Open(ctx, tx, devID, "optic_rx_low", port, events.Warning, fmt.Sprintf("Low optical receive power on %s: %.1f dBm", port, *o.RxDBm)) {
+					events.Record(ctx, tx, devID, events.OpticLowPower, events.Warning, fmt.Sprintf("Low optical receive power on %s: %.1f dBm", port, *o.RxDBm), nil)
+				}
+			} else {
+				events.Resolve(ctx, tx, devID, "optic_rx_low", port)
+			}
+		}
 		if id, ok := ifs[o.IfIndex]; ok {
 			b.Queue(`INSERT INTO optics(interface_id, vendor, part_number, serial, module_type, wavelength_nm, rx_dbm, tx_dbm, temperature_c)
 				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (interface_id) DO NOTHING`,

@@ -182,3 +182,47 @@ func MACToIndex(mac string) string {
 	}
 	return fmt.Sprintf("%d.%d.%d.%d.%d.%d", hw[0], hw[1], hw[2], hw[3], hw[4], hw[5])
 }
+
+const (
+	oidStpDesignatedRoot = "1.3.6.1.2.1.17.2.5.0"
+	oidStpRootPort       = "1.3.6.1.2.1.17.2.7.0"
+	oidStpPortState      = "1.3.6.1.2.1.17.2.15.1.3"
+)
+
+var stpStates = map[int64]string{1: "disabled", 2: "blocking", 3: "listening", 4: "learning", 5: "forwarding", 6: "broken"}
+
+// CollectSTP reads BRIDGE-MIB spanning-tree root and per-port states.
+func CollectSTP(ctx context.Context, s *Session, snap *model.Snapshot) error {
+	res, err := s.Client.Get(ctx, oidStpDesignatedRoot, oidStpRootPort)
+	if err != nil {
+		return err
+	}
+	for _, p := range res {
+		if !p.Exists() {
+			continue
+		}
+		switch p.OID {
+		case oidStpDesignatedRoot:
+			if b := p.Bytes(); len(b) == 8 {
+				prio := int(b[0])<<8 | int(b[1])
+				snap.System.STPRoot = fmt.Sprintf("%d/%s", prio, net.HardwareAddr(b[2:]).String())
+			}
+		case oidStpRootPort:
+			if bp := int(p.Int()); bp > 0 {
+				snap.System.STPRootPort = IfIndexForBridgePort(snap, bp)
+			}
+		}
+	}
+	states, err := s.Client.Walk(ctx, oidStpPortState)
+	if err != nil {
+		return nil
+	}
+	for _, p := range states {
+		idx, _ := snmp.Suffix(p.OID, oidStpPortState)
+		bp, _ := strconv.Atoi(idx)
+		if it := snap.InterfaceByIndex(IfIndexForBridgePort(snap, bp)); it != nil {
+			it.STPState = stpStates[p.Int()]
+		}
+	}
+	return nil
+}
