@@ -297,6 +297,9 @@ func (s *Store) writeInterfaces(ctx context.Context, tx pgx.Tx, devID int64, sna
 		prev[idx] = p
 	}
 	rows.Close()
+	if err := remapRenumbered(ctx, tx, devID, snap, prev); err != nil {
+		return fmt.Errorf("remap interfaces: %w", err)
+	}
 	now := time.Now()
 	seen := make([]int32, 0, len(snap.Interfaces))
 	for _, it := range snap.Interfaces {
@@ -554,4 +557,61 @@ func writeL2L3(ctx context.Context, tx pgx.Tx, devID int64, snap *model.Snapshot
 		}
 	}
 	return br.Close()
+}
+
+// remapRenumbered keeps interface rows (and everything that references them:
+// wall jacks, attachment history, neighbors) when a device renumbers its
+// ifIndex values, e.g. after a reboot without ifIndex persistence. Rows are
+// matched by interface name.
+func remapRenumbered(ctx context.Context, tx pgx.Tx, devID int64, snap *model.Snapshot, prev map[int]prevIface) error {
+	byName := map[string]int{}
+	for idx, p := range prev {
+		if p.name != "" {
+			if _, dup := byName[p.name]; dup {
+				byName[p.name] = -1 // ambiguous names are never remapped
+			} else {
+				byName[p.name] = idx
+			}
+		}
+	}
+	type move struct {
+		id       int64
+		from, to int
+	}
+	var moves []move
+	for _, it := range snap.Interfaces {
+		if p, ok := prev[it.IfIndex]; ok && p.name == it.Name {
+			continue
+		}
+		old, ok := byName[it.Name]
+		if !ok || old < 0 || old == it.IfIndex {
+			continue
+		}
+		moves = append(moves, move{prev[old].id, old, it.IfIndex})
+	}
+	if len(moves) == 0 {
+		return nil
+	}
+	targets := make([]int32, 0, len(moves))
+	ids := make([]int64, 0, len(moves))
+	for _, m := range moves {
+		targets = append(targets, int32(m.to))
+		ids = append(ids, m.id)
+	}
+	// Park moving rows and rows occupying a target index on unique negative
+	// indexes; rows that are not re-used are removed by the stale-row cleanup.
+	if _, err := tx.Exec(ctx, `UPDATE interfaces SET if_index = -id::int WHERE device_id=$1 AND (id = ANY($2) OR if_index = ANY($3))`, devID, ids, targets); err != nil {
+		return err
+	}
+	for _, m := range moves {
+		if _, err := tx.Exec(ctx, `UPDATE interfaces SET if_index=$2 WHERE id=$1`, m.id, m.to); err != nil {
+			return err
+		}
+		p := prev[m.from]
+		delete(prev, m.from)
+		prev[m.to] = p
+	}
+	events.Record(ctx, tx, devID, "interfaces.renumbered", events.Info,
+		fmt.Sprintf("%d interfaces changed ifIndex (matched by name)", len(moves)), nil)
+	return nil
 }

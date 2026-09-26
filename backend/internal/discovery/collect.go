@@ -201,7 +201,12 @@ func (c *Collector) collect(ctx context.Context, host string, credp *credentials
 	}
 	rest := cs[1:]
 	if adapter != nil {
-		rest = append(rest, adapter.Collectors()...)
+		for _, vc := range adapter.Collectors() {
+			// polls only refresh health; tables are re-read by full discoveries
+			if full || strings.HasSuffix(vc.Name(), "_health") {
+				rest = append(rest, vc)
+			}
+		}
 	}
 	for _, col := range rest {
 		key := col.Name()
