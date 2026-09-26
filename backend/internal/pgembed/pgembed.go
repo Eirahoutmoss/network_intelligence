@@ -203,22 +203,15 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.LogDir != "" {
 		startLog = filepath.Join(s.LogDir, "postgres-startup.log")
 	}
-	// pg_ctl output goes to a file, not a pipe: on Windows the postgres
-	// process started by pg_ctl inherits pg_ctl's standard handles, so a pipe
-	// would stay open for the life of the server and Run would never return.
-	outFile, err := os.CreateTemp(filepath.Dir(startLog), ".pg_ctl-*.out")
-	if err != nil {
-		return err
-	}
-	defer func() { outFile.Close(); os.Remove(outFile.Name()) }()
+	// No stdout/stderr handles for pg_ctl start: on Windows the postgres
+	// process inherits them for its whole life, so a pipe would block Run
+	// forever and a file would stay locked. Startup errors are in startLog.
 	cmd := exec.CommandContext(ctx, s.exe("pg_ctl"), "start", "-D", s.DataDir, "-l", startLog, "-w", "-t", "120", "-s")
-	cmd.Stdout, cmd.Stderr = outFile, outFile
 	cmd.WaitDelay = 5 * time.Second
 	hideWindow(cmd)
 	if err := cmd.Run(); err != nil {
-		out, _ := os.ReadFile(outFile.Name())
 		tail, _ := os.ReadFile(startLog)
-		return fmt.Errorf("embedded database did not start: %w: %s %s", err, strings.TrimSpace(string(out)), lastLines(string(tail), 6))
+		return fmt.Errorf("embedded database did not start: %w: %s", err, lastLines(string(tail), 8))
 	}
 	deadline := time.Now().Add(60 * time.Second)
 	for {

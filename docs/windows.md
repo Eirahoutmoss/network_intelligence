@@ -66,11 +66,25 @@ unchanged and has no Windows dependencies.
 Start menu → **Nexus** opens the web interface; **Nexus Diagnostics** writes a
 redacted diagnostic bundle to the desktop.
 
+The **notification area icon** (starts with Windows for every user; `/NOTRAY`
+turns this off) shows the state in its tooltip and offers:
+
+```
+Nexus
+  Open Nexus
+  ● Running
+  Start / Stop / Restart        (administrator prompt)
+  Diagnostics…                  (bundle on the desktop)
+  View logs                     (administrator prompt)
+  Settings
+  Exit
+```
+
 ## Silent / unattended installation
 
 ```
 Nexus-1.0.0-Setup-x64.exe /S [/D=C:\Program Files\Nexus] [/PORT=8080] [/LAN=1] [/DEMO=1]
-                             [/NOSTART] [/NODESKTOP] [/NOBROWSER] [/LOG=C:\Temp\nexus-install.log]
+                             [/NOSTART] [/NODESKTOP] [/NOBROWSER] [/NOTRAY] [/LOG=C:\Temp\nexus-install.log]
                              [/DATADIR=D:\NexusData]
 ```
 
@@ -88,7 +102,7 @@ on the machine, and the administrator account is created in the browser.
 
 | What | Location | Access |
 |---|---|---|
-| Program (per version) | `C:\Program Files\Nexus\app\<version>\` — `nexus.exe`, `web\`, `pgsql\`, licenses | read-only for everyone |
+| Program (per version) | `C:\Program Files\Nexus\app\<version>\` — `nexus.exe`, `nexus-tray.exe`, `web\`, `pgsql\`, licenses | read-only for everyone |
 | Configuration | `C:\ProgramData\Nexus\config\nexus.env` | Administrators, SYSTEM; service: read |
 | Master key, database password | `C:\ProgramData\Nexus\secrets\` | Administrators, SYSTEM; service: read |
 | Database | `C:\ProgramData\Nexus\data\db\` | Administrators, SYSTEM; service: modify |
@@ -277,5 +291,4 @@ embedded PostgreSQL lifecycle with the bundled binaries.
 
 ARM64: the code already builds for `windows/arm64`; a native ARM64 package
 needs ARM64 PostgreSQL binaries (the x64 installer runs under emulation and
-setup says so). A tray icon for start/stop is planned; today the Start menu,
-the web interface and `services.msc` cover it.
+setup says so).

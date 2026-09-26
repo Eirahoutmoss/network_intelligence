@@ -83,7 +83,9 @@ function Assert-NoSecretsIn([string[]] $files) {
   $secrets = Secrets
   foreach ($f in $files) {
     if (-not (Test-Path $f)) { continue }
-    $text = [System.IO.File]::ReadAllText($f)
+    # Share read/write/delete: the service keeps its logs open.
+    $fs = [System.IO.File]::Open($f, 'Open', 'Read', 'ReadWrite, Delete')
+    try { $text = (New-Object System.IO.StreamReader($fs)).ReadToEnd() } finally { $fs.Dispose() }
     foreach ($s in $secrets) {
       Assert (-not $text.Contains($s)) "secret found in $f"
     }
@@ -128,6 +130,18 @@ Step 'Service: automatic start, virtual account, recovery configured' {
   Assert ($sid -match 'UNRESTRICTED') "sid type: $sid"
 }
 
+Step 'Shortcuts, uninstall entry and notification area icon' {
+  $p = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+  $run = if ($p -and ($p.PSObject.Properties.Name -contains 'Nexus Tray')) { $p.'Nexus Tray' } else { $null }
+  Assert ($run -and (Test-Path ($run.Trim('"')))) "tray autostart missing or wrong: $run"
+  $sm = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\Nexus'
+  Assert (Test-Path (Join-Path $sm 'Nexus.url')) 'Start menu shortcut missing'
+  Assert ((Get-Content (Join-Path $sm 'Nexus.url') -Raw) -match "URL=http://localhost:$(Port)/") 'Start menu shortcut URL'
+  Assert (Test-Path (Join-Path $sm 'Nexus Diagnostics.lnk')) 'diagnostics shortcut missing'
+  $u = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Nexus'
+  Assert ($u.DisplayName -eq 'Nexus Network Intelligence' -and $u.Publisher -match 'Hasan') 'uninstall entry'
+}
+
 Step 'Web interface and API' {
   $r = Invoke-WebRequest -Uri "$(Base)/" -UseBasicParsing
   Assert ($r.StatusCode -eq 200 -and $r.Content -match '<html') 'web interface'
@@ -157,7 +171,9 @@ Step 'Firewall untouched in local mode' {
 }
 
 Step 'No secrets in logs, command lines or installer output' {
-  $files = @(Get-ChildItem (Join-Path $DataRoot 'logs') -File | ForEach-Object FullName) + @("$WorkDir\install1.log", "$WorkDir\install1.log.jsonl")
+  $logFiles = @(Get-ChildItem (Join-Path $DataRoot 'logs') -File -Force)
+  Assert (@($logFiles | Where-Object { $_.Name -like '.*' }).Count -eq 0) "stray files in logs: $($logFiles.Name -join ', ')"
+  $files = @($logFiles | ForEach-Object FullName) + @("$WorkDir\install1.log", "$WorkDir\install1.log.jsonl")
   Assert-NoSecretsIn $files
   $cmds = (Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('nexus.exe', 'postgres.exe', 'pg_ctl.exe') }).CommandLine -join "`n"
   foreach ($s in Secrets) { Assert (-not $cmds.Contains($s)) 'secret on a command line' }
@@ -287,6 +303,8 @@ Step 'Uninstall keeps data by default' {
   Assert (Test-Path (Join-Path $DataRoot 'data\db\PG_VERSION')) 'data was deleted'
   Assert (Test-Path (Join-Path $DataRoot 'secrets\master.key')) 'master key was deleted'
   Assert (-not (Test-Path 'HKLM:\Software\Nexus')) 'registry key left behind'
+  $run = (Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue).PSObject.Properties.Name
+  Assert (-not ($run -contains 'Nexus Tray')) 'tray autostart left behind'
 }
 
 Step 'Reinstall continues with the existing data' {

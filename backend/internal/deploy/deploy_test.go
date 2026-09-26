@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,9 +36,10 @@ func TestSecretsAreGeneratedOnceAndKept(t *testing.T) {
 	if err != nil || len(raw) != 32 {
 		t.Fatalf("master key is not 32 random bytes: %v", err)
 	}
-	st, _ := os.Stat(l.MasterKeyFile())
-	if st.Mode().Perm()&0o077 != 0 {
-		t.Errorf("master key mode %v", st.Mode())
+	// POSIX mode bits only exist on Unix; on Windows ACLs protect the file
+	// (verified by the installer test).
+	if st, _ := os.Stat(l.MasterKeyFile()); runtime.GOOS != "windows" && st.Mode().Perm()&0o077 != 0 {
+		t.Errorf("master key is readable by others")
 	}
 	created, err = l.EnsureSecrets()
 	key2, _ := os.ReadFile(l.MasterKeyFile())
