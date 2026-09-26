@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
 
@@ -345,8 +346,12 @@ func installCommand(args []string) (err error) {
 
 	// 6. Service, permissions, event log, firewall
 	cmdline := deploy.ServiceCommandLine(l.Exe(), l.ConfigFile())
-	if err := deploy.InstallService(cmdline); err != nil {
+	warns, err := deploy.InstallService(cmdline)
+	if err != nil {
 		return log.Fail("install", "Service", err.Error(), "")
+	}
+	for _, w := range warns {
+		log.Warn("install", "Service", w, "")
 	}
 	sid, err := deploy.ServiceSID()
 	if err == nil {
@@ -551,4 +556,69 @@ func writeResult(path string, kv map[string]string) {
 		out = append(out, byte(c), byte(c>>8))
 	}
 	_ = os.WriteFile(path, out, 0o644)
+}
+
+// diagnosticsGUI backs the "Nexus Diagnostics" Start menu shortcut: it
+// elevates itself (UAC), writes a redacted bundle to the desktop of the user
+// who clicked the shortcut and reports the result in a message box.
+func diagnosticsGUI(outDir string) error {
+	if outDir == "" {
+		desktop, err := windows.KnownFolderPath(windows.FOLDERID_Desktop, 0)
+		if err != nil {
+			desktop = os.Getenv("USERPROFILE")
+		}
+		outDir = desktop
+	}
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		exe, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		params := fmt.Sprintf(`diagnostics --gui --out-dir "%s"`, outDir)
+		if err := windows.ShellExecute(0, toUTF16("runas"), toUTF16(exe), toUTF16(params), nil, windows.SW_SHOWMINNOACTIVE); err != nil {
+			messageBox("Nexus Diagnostics", "Administrator rights are needed to read the Nexus logs and configuration.", windows.MB_ICONWARNING)
+			return err
+		}
+		return nil
+	}
+	l, err := layoutFromExe(registryDataDir())
+	if err != nil {
+		return err
+	}
+	if err := loadConfigFile(l.ConfigFile()); err != nil {
+		messageBox("Nexus Diagnostics", "Nexus is not configured on this computer:\n"+err.Error(), windows.MB_ICONERROR)
+		return err
+	}
+	path := filepath.Join(outDir, "nexus-diagnostics-"+time.Now().Format("20060102-150405")+".zip")
+	err = diagnosticsCommand([]string{"--out", path})
+	if _, statErr := os.Stat(path); statErr != nil {
+		msg := "The diagnostic bundle could not be created."
+		if err != nil {
+			msg += "\n\n" + redactor(nil).Redact(err.Error())
+		}
+		messageBox("Nexus Diagnostics", msg, windows.MB_ICONERROR)
+		return err
+	}
+	note := "Passwords, keys, SNMP communities, tokens and cookies were removed."
+	if err != nil {
+		note = "The database was not reachable; the bundle contains logs and configuration.\n" + note
+	}
+	messageBox("Nexus Diagnostics", "Diagnostic bundle saved:\n"+path+"\n\n"+note, windows.MB_ICONINFORMATION)
+	_ = exec.Command(filepath.Join(os.Getenv("WINDIR"), "explorer.exe"), "/select,", path).Start()
+	return nil
+}
+
+func messageBox(title, text string, flags uint32) {
+	_, _ = windows.MessageBox(0, toUTF16(text), toUTF16(title), flags|windows.MB_OK|windows.MB_SETFOREGROUND)
+}
+
+// registryDataDir returns the data directory recorded by the installer.
+func registryDataDir() string {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `Software\Nexus`, registry.QUERY_VALUE|registry.WOW64_64KEY)
+	if err != nil {
+		return ""
+	}
+	defer k.Close()
+	v, _, _ := k.GetStringValue("DataDir")
+	return v
 }

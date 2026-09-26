@@ -1,0 +1,30 @@
+Components bundled with the Nexus Windows installer
+===================================================
+
+Nexus itself is licensed under the Apache License 2.0 (see LICENSE and NOTICE).
+Go and JavaScript libraries compiled into nexus.exe and the web interface are
+listed in THIRD_PARTY_LICENSES.md.
+
+The installer additionally ships these unmodified third-party binaries in
+pgsql\ (all permissive or weak-copyleft licenses compatible with redistribution
+alongside Apache-2.0 software):
+
+  Component                         Files                                   License            Text
+  PostgreSQL 16 (server)            postgres.exe, pg_ctl.exe, initdb.exe,   PostgreSQL         PostgreSQL.txt
+                                    libpq.dll, libecpg.dll, libpgtypes.dll,
+                                    lib\*.dll, share\*
+  ICU 67                            icu*67.dll                              Unicode (ICU)      ICU.txt
+  OpenSSL 3                         libcrypto-3-x64.dll, libssl-3-x64.dll   Apache-2.0         OpenSSL.txt
+  zlib                              zlib1.dll                               zlib               zlib.txt
+  libxml2 / libxslt                 libxml2.dll, libxslt.dll                MIT                libxml2.txt, libxslt.txt
+  LZ4                               liblz4.dll                              BSD-2-Clause       lz4.txt
+  Zstandard                         libzstd.dll                             BSD-3-Clause       zstd.txt
+  GNU gettext (libintl), libiconv   libintl-9.dll, libiconv-2.dll           LGPL-2.1           LGPL-2.1-gettext-libiconv.txt
+  mingw-w64 winpthreads             libwinpthread-1.dll                     MIT                winpthreads.txt
+  Microsoft Visual C++ runtime      vcruntime140.dll, vcruntime140_1.dll,   Microsoft REDIST   Microsoft-VC-Runtime-REDIST.txt
+                                    msvcp140.dll                            (distributable code)
+
+The PostgreSQL Windows binaries are taken from the embedded-postgres-binaries
+package of the zonky project (Apache-2.0 packaging of the official PostgreSQL
+builds). Exact versions and checksums are pinned in deployments/windows/deps.env
+of the Nexus source repository.
