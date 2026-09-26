@@ -72,6 +72,9 @@ CREATE TABLE devices (
     memory_percent       DOUBLE PRECISION,
     chassis_id           TEXT,
     managed              BOOLEAN NOT NULL DEFAULT FALSE,  -- polled via SNMP
+    is_router            BOOLEAN NOT NULL DEFAULT FALSE,
+    is_bridge            BOOLEAN NOT NULL DEFAULT FALSE,
+    is_printer           BOOLEAN NOT NULL DEFAULT FALSE,
     status               TEXT NOT NULL DEFAULT 'unknown' CHECK (status IN ('up','down','unknown')),
     discovered_via       TEXT NOT NULL DEFAULT 'seed',
     -- derived intelligence
@@ -80,6 +83,11 @@ CREATE TABLE devices (
     os_name              TEXT,
     os_confidence        DOUBLE PRECISION NOT NULL DEFAULT 0,
     vendor_source        TEXT,
+    vendor_confidence    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    oui_vendor           TEXT,
+    random_mac           BOOLEAN NOT NULL DEFAULT FALSE,
+    fingerprint          JSONB NOT NULL DEFAULT '{}'::jsonb,   -- latest endpoint observation
+    fingerprinted_at     TIMESTAMPTZ,
     -- access
     snmp_credential_id   BIGINT REFERENCES credentials(id) ON DELETE SET NULL,
     ssh_credential_id    BIGINT REFERENCES credentials(id) ON DELETE SET NULL,
@@ -244,6 +252,7 @@ CREATE TABLE neighbors (
     remote_mgmt_ip      INET,
     remote_capabilities TEXT[] NOT NULL DEFAULT '{}',
     remote_device_id    BIGINT REFERENCES devices(id) ON DELETE SET NULL,
+    remote_interface_id BIGINT REFERENCES interfaces(id) ON DELETE SET NULL,
     first_seen          TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -497,3 +506,27 @@ CREATE TABLE settings (
     key    TEXT PRIMARY KEY,
     value  JSONB NOT NULL
 );
+
+-- ---------------------------------------------------------------- views
+-- Full path and building/floor/room names for each location.
+CREATE VIEW location_paths AS
+WITH RECURSIVE t AS (
+    SELECT id, parent_id, kind, name, level,
+           name::text AS path,
+           CASE WHEN kind = 'building' THEN name END AS building,
+           CASE WHEN kind = 'floor' THEN name END AS floor,
+           CASE WHEN kind = 'floor' THEN level END AS floor_level,
+           CASE WHEN kind IN ('room','closet','area') THEN name END AS room,
+           ARRAY[id] AS ancestors
+    FROM locations WHERE parent_id IS NULL
+    UNION ALL
+    SELECT l.id, l.parent_id, l.kind, l.name, l.level,
+           t.path || ' / ' || l.name,
+           COALESCE(CASE WHEN l.kind = 'building' THEN l.name END, t.building),
+           COALESCE(CASE WHEN l.kind = 'floor' THEN l.name END, t.floor),
+           COALESCE(CASE WHEN l.kind = 'floor' THEN l.level END, t.floor_level),
+           COALESCE(CASE WHEN l.kind IN ('room','closet','area') THEN l.name END, t.room),
+           t.ancestors || l.id
+    FROM locations l JOIN t ON l.parent_id = t.id
+)
+SELECT * FROM t;
