@@ -139,6 +139,7 @@ function Overview({ d }: { d: DeviceDetail }) {
               ['Software', f.os_version],
               ['Uptime', uptime(f.uptime_seconds)],
               ['CPU', f.cpu_percent != null ? `${f.cpu_percent}%` : '—'],
+              ['Spanning tree root', f.stp_root],
               ['Memory', f.memory_percent != null ? `${f.memory_percent}%` : '—'],
               ['SNMP location', f.sys_location],
               ['Contact', f.sys_contact],
@@ -224,6 +225,7 @@ function Interfaces({ id }: { id: number }) {
               <Td>
                 <span className="inline-flex items-center gap-1.5"><StatusDot status={i.oper_status === 'up' ? 'up' : i.admin_status === 'down' ? 'unknown' : 'down'} />{i.admin_status === 'down' ? 'disabled' : i.oper_status}</span>
                 {i.duplex && i.duplex !== 'unknown' && <div className="text-xs text-slate-400">{i.duplex} duplex</div>}
+                {i.stp_state && i.stp_state !== 'forwarding' && i.stp_state !== 'disabled' && <Badge tone="amber" title="Spanning tree state">STP {i.stp_state}</Badge>}
               </Td>
               <Td>{i.oper_status === 'up' ? speed(i.speed_bps) : '—'}</Td>
               <Td>{i.medium && i.medium !== 'unknown' ? <Badge tone={i.medium === 'fiber' ? 'blue' : 'slate'}>{i.medium}</Badge> : <span className="text-slate-400">—</span>}</Td>
@@ -239,7 +241,8 @@ function Interfaces({ id }: { id: number }) {
                 {i.neighbor && <div className="text-xs text-slate-400">{i.neighbor.port} · {i.neighbor.protocol.toUpperCase()}</div>}
                 {i.is_uplink && <Badge tone="brand">uplink</Badge>}
               </Td>
-              <Td className="whitespace-nowrap text-xs">{i.in_bps != null ? `${bps(i.in_bps)} / ${bps(i.out_bps)}` : '—'}{(i.in_errors ?? 0) > 0 && <div className="text-amber-600">{i.in_errors} input errors</div>}</Td>
+              <Td className="whitespace-nowrap text-xs">{i.in_bps != null ? `${bps(i.in_bps)} / ${bps(i.out_bps)}` : '—'}
+                {i.in_bps != null && i.speed_bps ? <div className="text-slate-400">{utilization(i)}% used</div> : null}{(i.in_errors ?? 0) > 0 && <div className="text-amber-600">{i.in_errors} input errors</div>}</Td>
               <Td className="text-xs">
                 {i.optic ? (
                   <>
@@ -255,6 +258,12 @@ function Interfaces({ id }: { id: number }) {
       </Table>
     </Card>
   )
+}
+
+function utilization(i: Interface): string {
+  const peak = Math.max(i.in_bps ?? 0, i.out_bps ?? 0)
+  const pct = i.speed_bps ? (peak / i.speed_bps) * 100 : 0
+  return pct < 0.1 && pct > 0 ? '<0.1' : pct.toFixed(pct < 10 ? 1 : 0)
 }
 
 function Neighbors({ id }: { id: number }) {

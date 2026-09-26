@@ -121,7 +121,7 @@ func (s *Server) getDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	d := deviceDetail{DeviceRow: row, Evidence: map[string][]evidenceItem{}}
 	facts, err := collectMaps(ctx, s, `SELECT sys_name, sys_descr, sys_object_id, sys_contact, sys_location, serial, os_version, hardware_rev,
-			host(mgmt_ip) AS mgmt_ip, uptime_seconds, cpu_percent, memory_percent, chassis_id, is_router, is_bridge, is_printer,
+			host(mgmt_ip) AS mgmt_ip, uptime_seconds, cpu_percent, memory_percent, chassis_id, stp_root, is_router, is_bridge, is_printer,
 			oui_vendor, random_mac, vendor_source, vendor_confidence, last_discovered_at, last_polled_at, fingerprinted_at, discovered_via
 		FROM devices WHERE id=$1`, id)
 	if err != nil {
@@ -207,7 +207,7 @@ func (s *Server) deviceInterfaces(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := collectMaps(r.Context(), s, `SELECT i.id, i.if_index, i.name, i.descr, i.alias, i.if_type, i.mtu, i.speed_bps, i.mac::text AS mac,
 			i.admin_status, i.oper_status, i.duplex, i.medium, i.pvid, i.in_bps, i.out_bps, i.in_errors::float8 AS in_errors, i.out_errors::float8 AS out_errors,
-			i.is_uplink, i.last_change_seconds, i.updated_at,
+			i.is_uplink, i.stp_state, i.last_change_seconds, i.updated_at,
 			(SELECT jsonb_build_object('vendor',o.vendor,'part_number',o.part_number,'serial',o.serial,'type',o.module_type,'rx_dbm',o.rx_dbm,'tx_dbm',o.tx_dbm)
 				FROM optics o WHERE o.interface_id=i.id) AS optic,
 			(SELECT COALESCE(array_agg(v.vlan_id ORDER BY v.vlan_id), '{}') FROM interface_vlans v WHERE v.interface_id=i.id) AS vlans,

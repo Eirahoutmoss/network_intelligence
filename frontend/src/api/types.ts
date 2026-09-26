@@ -112,6 +112,7 @@ export interface Interface {
   in_errors: number | null
   out_errors: number | null
   is_uplink: boolean
+  stp_state: string | null
   optic: { vendor: string | null; part_number: string | null; serial: string | null; type: string | null; rx_dbm: number | null; tx_dbm: number | null } | null
   vlans: number[]
   neighbor: { device_id: number | null; name: string | null; port: string | null; protocol: string } | null

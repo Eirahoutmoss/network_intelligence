@@ -93,6 +93,7 @@ func Standard() []Collector {
 		Func{"lldp", CollectLLDP},
 		Func{"vlans", CollectVLANs},
 		Func{"fdb", CollectFDB},
+		Func{"stp", CollectSTP},
 		Func{"arp", CollectARP},
 		Func{"routes", CollectRoutes},
 		Func{"host_resources", CollectHostResources},

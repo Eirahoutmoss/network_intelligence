@@ -96,6 +96,8 @@ type Lab struct {
 	Devices   []*Device
 	Endpoints []*Endpoint
 	Links     []Link
+	// Blocked marks "device|port" as STP blocking (redundant links).
+	Blocked map[string]bool
 	// V3 credentials accepted by every simulated agent (in addition to v2c Community).
 	Community string
 	V3User    string
@@ -367,6 +369,7 @@ func (l *Lab) buildDevice(d *Device) AgentMIBs {
 	if d.Router {
 		l.buildL3(m, d)
 	}
+	l.buildSTP(m, d)
 	l.buildHealth(m, d)
 	return AgentMIBs{Main: m, Contexts: ctxs}
 }
@@ -656,4 +659,36 @@ func sortedKeys(m map[int]string) []int {
 	}
 	sort.Ints(k)
 	return k
+}
+
+// buildSTP: the core is the root bridge; every up port forwards except the
+// optional blocked ports listed in Lab.Blocked.
+func (l *Lab) buildSTP(m *snmp.MIB, d *Device) {
+	root := l.Devices[0]
+	rootID := append([]byte{0x10, 0x00}, macBytes(root.ChassisMAC)...) // priority 4096
+	m.Octets("1.3.6.1.2.1.17.2.5.0", rootID)
+	rootPort := 0
+	if d.Parent != "" {
+		if pd := l.Device(d.Parent); pd != nil {
+			for _, k := range l.Links {
+				if k.A == d.Name && k.B == pd.Name {
+					rootPort = d.port(k.APort).BridgePort
+				}
+				if k.B == d.Name && k.A == pd.Name {
+					rootPort = d.port(k.BPort).BridgePort
+				}
+			}
+		}
+	}
+	m.Int("1.3.6.1.2.1.17.2.7.0", int64(rootPort))
+	for _, p := range d.Ports {
+		state := int64(1) // disabled
+		if p.Up {
+			state = 5 // forwarding
+		}
+		if l.Blocked[d.Name+"|"+p.Name] {
+			state = 2
+		}
+		m.Int(fmt.Sprintf("1.3.6.1.2.1.17.2.15.1.3.%d", p.BridgePort), state)
+	}
 }

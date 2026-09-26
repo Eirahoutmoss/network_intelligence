@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -56,7 +57,8 @@ type Service struct {
 	Secure bool
 	Log    *slog.Logger
 
-	limiter sync.Map // ip → *attempts
+	limiter     sync.Map // ip → *attempts
+	limiterSize atomic.Int64
 }
 
 type attempts struct {
@@ -208,6 +210,20 @@ func (s *Service) Users(ctx context.Context) ([]User, error) {
 
 // allow implements a per-client login attempt limit (10 per 5 minutes).
 func (s *Service) allow(client string) bool {
+	// Opportunistically drop expired entries so the map cannot grow without bound.
+	if n := s.limiterSize.Add(1); n%1024 == 0 {
+		now := time.Now()
+		s.limiter.Range(func(k, v any) bool {
+			a := v.(*attempts)
+			a.mu.Lock()
+			expired := now.After(a.reset)
+			a.mu.Unlock()
+			if expired {
+				s.limiter.Delete(k)
+			}
+			return true
+		})
+	}
 	v, _ := s.limiter.LoadOrStore(client, &attempts{})
 	a := v.(*attempts)
 	a.mu.Lock()
