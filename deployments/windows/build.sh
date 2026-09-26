@@ -71,25 +71,33 @@ cp -R "$ROOT/frontend/dist" "$APP/web"
 # ---------------------------------------------------------------- resources
 V4="$VERSION.0"
 VC="${VERSION//./,},0"
-SYSO="$ROOT/backend/cmd/nexus/rsrc_windows_amd64.syso"
-rm -f "$SYSO"
-if command -v x86_64-w64-mingw32-windres >/dev/null 2>&1; then
-  log "Compiling Windows resources (icon, version, manifest)"
-  sed "s|@VERSION4@|$V4|" "$HERE/nexus.manifest" > "$BUILD/nexus.manifest"
+WINDRES=""
+command -v x86_64-w64-mingw32-windres >/dev/null 2>&1 && WINDRES=x86_64-w64-mingw32-windres
+[[ -n "$WINDRES" ]] || echo "   (windres not found: executables get no icon/version resource)"
+sed "s|@VERSION4@|$V4|" "$HERE/nexus.manifest" > "$BUILD/nexus.manifest"
+resources() { # name description output.syso
+  [[ -n "$WINDRES" ]] || return 0
   sed -e "s|@ASSETS@|$HERE/assets|" -e "s|@MANIFEST@|$BUILD/nexus.manifest|" -e "s|@VERSIONC@|$VC|g" \
-      -e "s|@VERSION@|$VERSION|g" -e "s|@NAME@|nexus|g" -e "s|@DESCRIPTION@|Nexus Network Intelligence|" \
-      "$HERE/nexus.rc.in" > "$BUILD/nexus.rc"
-  PREPROC=cpp; command -v cpp >/dev/null 2>&1 || PREPROC=x86_64-w64-mingw32-gcc
-  x86_64-w64-mingw32-windres --preprocessor="$PREPROC" -c 65001 -O coff -o "$SYSO" "$BUILD/nexus.rc"
-else
-  echo "   (windres not found: nexus.exe gets no icon/version resource)"
-fi
+      -e "s|@VERSION@|$VERSION|g" -e "s|@NAME@|$1|g" -e "s|@DESCRIPTION@|$2|" \
+      "$HERE/nexus.rc.in" > "$BUILD/$1.rc"
+  local pre=cpp; command -v cpp >/dev/null 2>&1 || pre=x86_64-w64-mingw32-gcc
+  "$WINDRES" --preprocessor="$pre" -c 65001 -O coff -o "$3" "$BUILD/$1.rc"
+}
+SYSO="$ROOT/backend/cmd/nexus/rsrc_windows_amd64.syso"
+TRAY_SYSO="$ROOT/backend/cmd/nexus-tray/rsrc_windows_amd64.syso"
+rm -f "$SYSO" "$TRAY_SYSO"
+trap 'rm -f "$SYSO" "$TRAY_SYSO"' EXIT
+log "Compiling Windows resources (icon, version, manifest)"
+resources nexus "Nexus Network Intelligence" "$SYSO"
+resources nexus-tray "Nexus notification area icon" "$TRAY_SYSO"
 
 # ---------------------------------------------------------------- backend
-log "Building nexus.exe $VERSION"
+log "Building nexus.exe and nexus-tray.exe $VERSION"
 (cd "$ROOT/backend" && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
   go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$VERSION" -o "$APP/nexus.exe" ./cmd/nexus)
-rm -f "$SYSO"
+(cd "$ROOT/backend" && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+  go build -trimpath -buildvcs=false -ldflags "-s -w -H windowsgui" -o "$APP/nexus-tray.exe" ./cmd/nexus-tray)
+rm -f "$SYSO" "$TRAY_SYSO"
 
 # ---------------------------------------------------------------- PostgreSQL
 PGSRC="$BUILD/pgsrc"
@@ -166,8 +174,9 @@ sign() { # file
 }
 SIGNED=no
 if [[ -n "${SIGN_PFX:-}" ]]; then
-  log "Signing nexus.exe"
+  log "Signing nexus.exe and nexus-tray.exe"
   sign "$APP/nexus.exe"
+  sign "$APP/nexus-tray.exe"
   SIGNED=yes
 fi
 

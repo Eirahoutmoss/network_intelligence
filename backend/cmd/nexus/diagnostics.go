@@ -86,6 +86,16 @@ func diagnosticsCommand(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	if cfg.Embedded() {
+		// Diagnostics never start the embedded database themselves.
+		if ok, err := embeddedServer(cfg, cliLogger(cfg)).Attach(ctx); err != nil || !ok {
+			if err == nil {
+				err = errors.New("the embedded database is not running (is the Nexus service stopped?)")
+			}
+			fmt.Fprintln(os.Stderr, "database unavailable:", redactor(cfg).Redact(err.Error()))
+			return offlineBundle(cfg, *out, err)
+		}
+	}
 	db, done, err := openDatabase(ctx, cfg, cliLogger(cfg), true)
 	if err != nil {
 		// Still produce a bundle with logs and configuration.

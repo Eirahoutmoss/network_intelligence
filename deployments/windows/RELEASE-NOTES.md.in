@@ -22,7 +22,7 @@ newer, Windows 11, Windows Server 2019 or newer, x64.
 Unattended installation:
 
 ```
-@FILE@ /S [/PORT=8080] [/LAN=1] [/DEMO=1] [/NOSTART] [/NODESKTOP] [/NOBROWSER] [/LOG=C:\path\install.log] [/D=C:\Program Files\Nexus]
+@FILE@ /S [/PORT=8080] [/LAN=1] [/DEMO=1] [/NOSTART] [/NODESKTOP] [/NOBROWSER] [/NOTRAY] [/LOG=C:\path\install.log] [/D=C:\Program Files\Nexus]
 ```
 
 Exit codes: 0 success · 2 installation failed · 3 upgrade failed, previous version restored.

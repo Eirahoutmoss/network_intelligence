@@ -13,6 +13,7 @@
 ;   /NOSTART          install without starting the service
 ;   /NODESKTOP        no desktop shortcut
 ;   /NOBROWSER        do not open the browser at the end
+;   /NOTRAY           do not start the notification area icon with Windows
 ;   /LOG=path         write the installation log to this file as well
 ;   /DATADIR=path     data directory (default %ProgramData%\Nexus)
 ; Exit codes: 0 ok, 1 cancelled, 2 installation failed, 3 upgrade failed (previous version restored)
@@ -33,6 +34,7 @@ SetCompressorDictSize 64
 !define REGKEY "Software\Nexus"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Nexus"
 !define APPDIR "$INSTDIR\app\${VERSION}"
+!define RUNKEY "Software\Microsoft\Windows\CurrentVersion\Run"
 
 Name "${PRODUCT} ${VERSION}"
 Caption "${PRODUCT} ${VERSION} Setup"
@@ -68,6 +70,7 @@ Var Demo
 Var NoStart
 Var WantDesktop
 Var NoBrowser
+Var NoTray
 Var LogFile
 Var Status           ; ok | installed | failed | rolled-back | rollback-failed
 Var Url
@@ -165,6 +168,8 @@ Function .onInit
   !insertmacro ParseOption "DATADIR" $DataDir "$APPDATA\Nexus"
   StrCpy $NoStart "0"
   StrCpy $NoBrowser "0"
+  StrCpy $NoTray "0"
+  !insertmacro ParseFlag "NOTRAY" $NoTray
   StrCpy $WantDesktop "1"
   !insertmacro ParseFlag "NOSTART" $NoStart
   !insertmacro ParseFlag "NOBROWSER" $NoBrowser
@@ -294,6 +299,10 @@ Section "Nexus" SecMain
   SetDetailsPrint both
   StrCpy $Status "failed"
 
+  ; The notification area icon of any user holds its program files open.
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM nexus-tray.exe'
+  Pop $0
+
   ; Repairing the same version: its files are in use by the running service.
   ${If} ${FileExists} "${APPDIR}\nexus.exe"
     DetailPrint "Stopping Nexus to repair version ${VERSION}..."
@@ -384,6 +393,16 @@ Section "Nexus" SecMain
     Delete "$DESKTOP\Nexus.url"
   ${EndIf}
 
+  ; Notification area icon: starts with Windows for every user.
+  ${If} $Status == "ok"
+  ${OrIf} $Status == "installed"
+    ${If} $NoTray == "1"
+      DeleteRegValue HKLM "${RUNKEY}" "Nexus Tray"
+    ${Else}
+      WriteRegStr HKLM "${RUNKEY}" "Nexus Tray" '"${APPDIR}\nexus-tray.exe"'
+    ${EndIf}
+  ${EndIf}
+
   ; Remove older application versions after a successful upgrade.
   ${If} $Status == "ok"
   ${OrIf} $Status == "installed"
@@ -430,6 +449,13 @@ Function .onInstSuccess
   ${AndIf} $Status == "ok"
   ${AndIf} $NoBrowser != "1"
     Call OpenNexus
+  ${EndIf}
+  ; Start the notification area icon for the signed-in user (not elevated).
+  ${IfNot} ${Silent}
+    ReadRegStr $0 HKLM "${RUNKEY}" "Nexus Tray"
+    ${If} $0 != ""
+      Exec '"$WINDIR\explorer.exe" $0'
+    ${EndIf}
   ${EndIf}
 FunctionEnd
 
@@ -542,6 +568,9 @@ Section "Uninstall"
   SetShellVarContext all
   SetRegView 64
   ${DisableX64FSRedirection}
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM nexus-tray.exe'
+  Pop $0
+  DeleteRegValue HKLM "${RUNKEY}" "Nexus Tray"
   ReadRegStr $R0 HKLM "${REGKEY}" "AppDir"
   ${IfNot} ${FileExists} "$R0\nexus.exe"
     ; fall back to any installed version
