@@ -66,17 +66,48 @@ type Jack struct {
 var validKinds = map[string]bool{"site": true, "building": true, "floor": true, "room": true, "closet": true, "area": true}
 
 func (s *Service) List(ctx context.Context) ([]Location, error) {
-	rows, err := s.DB.Query(ctx, `SELECT l.id, l.parent_id, l.kind, l.name, l.description, l.level, lp.path,
-			(SELECT count(*) FROM device_view v WHERE v.location_id = ANY(ARRAY(SELECT id FROM location_paths x WHERE l.id = ANY(x.ancestors))))
+	rows, err := s.DB.Query(ctx, `SELECT l.id, l.parent_id, l.kind, l.name, l.description, l.level, lp.path, lp.ancestors
 		FROM locations l JOIN location_paths lp ON lp.id=l.id ORDER BY lp.path`)
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (Location, error) {
+	var ancestors [][]int64
+	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Location, error) {
 		var l Location
-		err := r.Scan(&l.ID, &l.ParentID, &l.Kind, &l.Name, &l.Description, &l.Level, &l.Path, &l.DeviceCount)
+		var anc []int64
+		err := r.Scan(&l.ID, &l.ParentID, &l.Kind, &l.Name, &l.Description, &l.Level, &l.Path, &anc)
+		ancestors = append(ancestors, anc)
 		return l, err
 	})
+	if err != nil || len(out) == 0 {
+		return out, err
+	}
+	// Count devices per location once, then roll the counts up the tree.
+	direct := map[int64]int{}
+	crow, err := s.DB.Query(ctx, `SELECT location_id, count(*) FROM device_view WHERE location_id IS NOT NULL GROUP BY 1`)
+	if err != nil {
+		return nil, err
+	}
+	for crow.Next() {
+		var id int64
+		var n int
+		if err := crow.Scan(&id, &n); err != nil {
+			crow.Close()
+			return nil, err
+		}
+		direct[id] = n
+	}
+	crow.Close()
+	total := map[int64]int{}
+	for i, l := range out {
+		for _, a := range ancestors[i] {
+			total[a] += direct[l.ID]
+		}
+	}
+	for i := range out {
+		out[i].DeviceCount = total[out[i].ID]
+	}
+	return out, nil
 }
 
 var reLevel = regexp.MustCompile(`-?\d+`)
