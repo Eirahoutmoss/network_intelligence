@@ -284,3 +284,35 @@ func DefaultName(kind, user, ip string) string {
 	}
 	return strings.Join(parts, " ")
 }
+
+// AAD returns the additional authenticated data bound to a stored secret.
+func AAD(id int64, kind string) []byte { return aad(id, kind) }
+
+// Verify tries to decrypt every stored credential with the current master
+// key and reports how many fail (for diagnostics; plaintext is discarded).
+func (s *Store) Verify(ctx context.Context) (total, failed int, err error) {
+	rows, err := s.db.Query(ctx, `SELECT id, kind, secret FROM credentials`)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var kind string
+		var sealed []byte
+		if err := rows.Scan(&id, &kind, &sealed); err != nil {
+			return total, failed, err
+		}
+		total++
+		plain, err := s.sealer.Open(sealed, aad(id, kind))
+		if err != nil {
+			failed++
+			continue
+		}
+		clear(plain)
+	}
+	return total, failed, rows.Err()
+}
+
+// DB returns the database handle the store writes to.
+func (s *Store) DB() storage.DBTX { return s.db }

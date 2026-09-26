@@ -13,6 +13,8 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 )
@@ -63,4 +65,11 @@ func (s *Sealer) Open(sealed, aad []byte) ([]byte, error) {
 		return nil, errors.New("decrypt credential: authentication failed (wrong master key?)")
 	}
 	return pt, nil
+}
+
+// KeyFingerprint identifies a master key without revealing it
+// (first 8 bytes of SHA-256 over a domain-separated input, hex).
+func KeyFingerprint(masterKey []byte) string {
+	h := sha256.Sum256(append([]byte("nexus-master-key-fingerprint:"), masterKey...))
+	return hex.EncodeToString(h[:8])
 }
