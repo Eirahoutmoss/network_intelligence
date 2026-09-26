@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
 )
 
 // Severity of an install log entry.
@@ -33,6 +34,9 @@ type Entry struct {
 type Log struct {
 	Out   io.Writer
 	ASCII bool // plain markers instead of ✓ / ! / ✗
+	// DialogFont uses √ and × which every Windows UI font contains (the
+	// installer window's font has no ✓/✗ glyphs).
+	DialogFont bool
 
 	mu   sync.Mutex
 	file *os.File
@@ -76,7 +80,13 @@ func (l *Log) marker(sev string) string {
 	case Warn:
 		return "!"
 	case Error:
+		if l.DialogFont {
+			return "×"
+		}
 		return "✗"
+	}
+	if l.DialogFont {
+		return "√"
 	}
 	return "✓"
 }
@@ -103,6 +113,34 @@ func (l *Log) Record(phase, component, sev, msg, hint string) {
 			fmt.Fprintln(l.Out, "      "+hint)
 		}
 	}
+}
+
+// UTF16Writer converts UTF-8 text to UTF-16LE with a leading BOM. NSIS's
+// nsExec decodes child output as the ANSI code page unless it starts with a
+// UTF-16LE byte order mark, so this keeps ✓ and non-ASCII names intact.
+type UTF16Writer struct {
+	W       io.Writer
+	started bool
+}
+
+func (u *UTF16Writer) Write(p []byte) (int, error) {
+	var out []byte
+	if !u.started {
+		out = append(out, 0xFF, 0xFE)
+		u.started = true
+	}
+	for _, r := range string(p) {
+		if r == '\n' {
+			out = append(out, '\r', 0) // CRLF for the Windows list control
+		}
+		for _, c := range utf16.Encode([]rune{r}) {
+			out = append(out, byte(c), byte(c>>8))
+		}
+	}
+	if _, err := u.W.Write(out); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 // Heading prints a section title to the installer window.

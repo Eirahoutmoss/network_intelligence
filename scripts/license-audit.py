@@ -121,6 +121,18 @@ def main():
     for eco, name, ver, lic in rows:
         lines.append(f"| {eco} | {name} | {ver} | {lic} | {verdict(lic)} |")
     lines.append("")
+    lines += [
+        "## Windows installer: bundled binaries",
+        "",
+        "The Windows installer additionally ships the unmodified PostgreSQL 16 server binaries and",
+        "the libraries they load (PostgreSQL License, ICU/Unicode, OpenSSL/Apache-2.0, zlib, MIT,",
+        "BSD, LGPL-2.1 for GNU gettext's libintl and GNU libiconv as separate DLLs) and the",
+        "Microsoft Visual C++ runtime DLLs (Microsoft redistributable code). Their license texts",
+        "are installed in `licenses\\` next to `nexus.exe`; the list is in",
+        "[deployments/windows/licenses/BUNDLED.txt](../deployments/windows/licenses/BUNDLED.txt).",
+        "Versions and checksums are pinned in `deployments/windows/deps.env`.",
+        "",
+    ]
     if "--write" in sys.argv:
         with open(os.path.join(ROOT, "docs", "THIRD_PARTY_LICENSES.md"), "w") as f:
             f.write("\n".join(lines))

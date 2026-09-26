@@ -21,12 +21,37 @@
   `HttpOnly`, `SameSite=Strict` and `Secure` when `NEXUS_COOKIE_SECURE=true`.
 - Changing a password or disabling a user revokes their sessions. The last active admin
   cannot be demoted, disabled or deleted.
+- **First administrator.** Single-host installations (Windows installer,
+  `NEXUS_FIRST_RUN_SETUP=local`) have no default password: while no account exists, the
+  web UI offers "create the administrator" — only to requests from the local machine
+  (loopback address; proxy headers are ignored), serialized so exactly one can succeed,
+  with CSRF protection and an audit entry. Docker/Linux keep `NEXUS_ADMIN_PASSWORD`.
 
 | Role | Can |
 |---|---|
 | viewer | read everything except credentials |
 | operator | + add devices / run discovery, edit context and locations, manual links, acknowledge alerts, open CLI sessions |
 | admin | + manage credentials, users, settings, delete devices, reset SSH host keys, enable Telnet, read audit log and CLI transcripts |
+
+## Single-host / Windows deployment
+
+- The installer requests UAC elevation once; the service runs as the virtual account
+  `NT SERVICE\Nexus` (no password, no interactive logon), not LocalSystem.
+- The master key and the embedded database password are generated on the target machine
+  from the OS CSPRNG and stored in `ProgramData\Nexus\secrets` with a protected ACL
+  (Administrators, SYSTEM; service read-only). Configuration only references them
+  (`*_FILE`), so secrets never appear in command lines, the service definition, logs or
+  installer output (verified by the Windows CI scenario).
+- The embedded PostgreSQL listens on `127.0.0.1` only, with SCRAM-SHA-256 authentication.
+- The web interface binds to `127.0.0.1` unless network access is chosen explicitly; then
+  one inbound firewall rule for that program and port on domain/private profiles is added.
+  The firewall is never disabled.
+- Backups contain credentials only in encrypted form; the master key is included only
+  when requested, wrapped with a passphrase (Argon2id + AES-256-GCM). Sessions are never
+  exported.
+- Diagnostic bundles are passed through a redactor (known secret values of the
+  installation plus patterns for passwords, communities, keys, PEM blocks, tokens,
+  cookies, URL credentials) and contain configuration paths, not secrets.
 
 ## Web protections
 

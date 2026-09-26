@@ -1,5 +1,8 @@
 # Installation & operations
 
+For **Windows** use the installer — see [windows.md](windows.md). The rest of this page
+covers Docker and Linux.
+
 ## Requirements
 
 - Linux host (x86-64 or arm64) with Docker + Docker Compose, **or** Go 1.26+, Node 22+ and
@@ -143,14 +146,27 @@ variables — never in the repository.
 
 ## Backup & restore
 
+Nexus writes portable backups itself (no `pg_dump` needed): a zip of the whole database
+with a manifest (application and schema version, master-key fingerprint). Stored device
+credentials stay encrypted; sessions are not exported.
+
 ```bash
-docker compose exec db pg_dump -U nexus -Fc nexus > nexus-$(date +%F).dump
-# restore into an empty database
-docker compose exec -T db pg_restore -U nexus -d nexus --clean < nexus-2026-09-26.dump
+# web: Settings → Diagnostics & backup → Download backup (optionally with the key, passphrase-protected)
+docker compose exec nexus nexus backup --out /tmp/nexus.nxbackup      # or: nexus backup --include-key
+docker compose cp nexus:/tmp/nexus.nxbackup .
+# restore (replaces all data after writing a safety backup): stop the server, restore in a one-off container
+docker compose stop nexus
+docker compose run --rm -v "$PWD:/backup" nexus restore --yes /backup/nexus.nxbackup
+docker compose start nexus
 ```
 
-Back up the **master key** separately: without it stored credentials cannot be decrypted
-(re-enter them if lost; discovered data is unaffected).
+Set `NEXUS_BACKUP_DIR` to get a daily backup and one before every schema upgrade
+(Windows installations do this by default). `pg_dump` works as well.
+
+Back up the **master key** separately (or use `--include-key` with a passphrase):
+without it stored credentials cannot be decrypted (re-enter them if lost; discovered
+data is unaffected). A backup restored on an installation with a different key re-encrypts
+the credentials when it contains the wrapped key and the passphrase is given.
 
 ## Upgrades
 
@@ -158,6 +174,9 @@ Pull the new version and `docker compose up -d --build`. Migrations run automati
 start-up (serialized with an advisory lock) and are forward-only.
 
 ## Health & monitoring
+
+- **Settings → Diagnostics & backup → Run health check** and **Export diagnostic bundle**
+  (secrets are removed automatically); `nexus diagnostics --out FILE` on the command line.
 
 - `GET /api/health` — database reachability and latency (503 when degraded).
 - `GET /metrics` — Prometheus text format: discovery/poll durations, SNMP and poll errors

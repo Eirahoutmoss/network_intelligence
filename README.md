@@ -22,11 +22,22 @@ DISCOVER  →  UNDERSTAND  →  ASK
 
 ## Türkçe özet
 
-- **Kurulum:** `cp .env.example .env` → `NEXUS_MASTER_KEY` (`openssl rand -base64 32`) ve parolaları doldurun → `docker compose up -d` → <http://localhost:8080>.
+- **Windows kurulumu:** `Nexus-1.0.0-Setup-x64.exe` dosyasını çalıştırın, yönetici onayını verin. Kurulum bilgisayarı kontrol eder, Nexus'u kendi veritabanıyla birlikte Windows hizmeti olarak kurar, çalıştığını doğrular ve tarayıcıyı açar; ilk yönetici hesabını tarayıcıda oluşturursunuz. Docker, WSL, PostgreSQL veya internet bağlantısı gerekmez. Ayrıntılar: [docs/windows.md](docs/windows.md).
+- **Docker kurulumu:** `cp .env.example .env` → `NEXUS_MASTER_KEY` (`openssl rand -base64 32`) ve parolaları doldurun → `docker compose up -d` → <http://localhost:8080>.
 - **Deneme ağı:** `.env` içinde `NEXUS_SIMULATOR=1` ayarlayın. Gerçek cihaz olmadan simüle bir kampüs ağı (Huawei core, Cisco dağıtım, HPE lab switch'i, FortiGate, ~35 uç cihaz) kullanılır. *Add Device* ekranında `10.20.99.1` / `prometheus` / `nexus-demo-pass` girin.
 - **Gerçek ağ:** *Add Device* ekranında switch'in IP'si, SNMPv3 kullanıcı adı ve parolası yeterlidir (varsayılan: SNMPv3 authNoPriv, SHA). Keşif yalnızca izin verilen ağlarda (varsayılan: başlangıç IP'sinin /16'sı) ve belirlenen komşu derinliğinde yapılır.
 - **Explorer:** Soruları Türkçe veya İngilizce sorun. Soru yapılandırılmış bir filtreye çevrilir, cevap yalnızca veritabanındaki keşif verisinden gelir; nasıl anlaşıldığı ve kaynağı ekranda gösterilir.
 - **CLI:** Cihaz sayfasında *Open CLI* sağdan bir terminal açar. Tarayıcı cihaza doğrudan bağlanmaz; bağlantı backend üzerinden SSH ile kurulur, parolalar tarayıcıya gönderilmez, oturumlar denetim için kaydedilir. Telnet varsayılan olarak kapalıdır.
+
+## Quick start (Windows)
+
+Run **`Nexus-<version>-Setup-x64.exe`** (built by `deployments/windows/build.sh`,
+published by the *Windows installer* workflow) and accept the administrator prompt.
+Setup checks the computer, installs Nexus as a Windows service with its own bundled
+PostgreSQL, generates the encryption key, verifies the installation and opens the
+browser, where you create the administrator. No Docker, WSL, PostgreSQL, `.env` file or
+internet access is needed; silent installs, upgrades with automatic rollback, backups
+and diagnostics are built in. See **[docs/windows.md](docs/windows.md)**.
 
 ## Quick start (Docker)
 
@@ -79,7 +90,7 @@ proxy, backups, upgrades and the first test against a real Huawei switch.
 ```
 backend/        Go service (cmd/nexus, internal/*, migrations)
 frontend/       React + TypeScript + Vite + Tailwind web UI
-deployments/    Dockerfile
+deployments/    Dockerfile; windows/ installer (NSIS script, build, tests)
 docs/           Architecture, installation, security, API, vendors, licenses
 scripts/        License audit
 tests/e2e/      Playwright end-to-end tests
@@ -88,6 +99,7 @@ tests/e2e/      Playwright end-to-end tests
 ## Documentation
 
 - [Architecture](docs/architecture.md) — data model, collectors, identity, classification, topology, explorer
+- [Windows installation](docs/windows.md) — installer, service, upgrade/rollback, backup, diagnostics
 - [Installation & operations](docs/installation.md)
 - [Security](docs/security.md)
 - [HTTP API](docs/api.md)
