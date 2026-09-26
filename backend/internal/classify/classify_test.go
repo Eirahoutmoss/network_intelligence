@@ -126,3 +126,15 @@ func TestVendor(t *testing.T) {
 		t.Fatalf("%+v", v)
 	}
 }
+
+func TestSambaIsNotWindows(t *testing.T) {
+	r := OS(Facts{Obs: fingerprint.Observation{SMBNativeOS: "Windows 6.1", SMBLanMan: "Samba 4.19.5-Ubuntu", SMBDialect: "NT LM 0.12",
+		OpenPorts: []int{22, 139, 445}, NetBIOSName: "LEGACYSRV"}})
+	if r.Value == "Windows 7" || r.Value == "" {
+		t.Fatalf("samba misclassified: %+v", r)
+	}
+	w := OS(Facts{Obs: fingerprint.Observation{SMBNativeOS: "Windows 10.0 Build 22631", SMBDialect: "SMB 3.0.2", OpenPorts: []int{135, 445}}})
+	if w.Value != "Windows 11" {
+		t.Fatalf("build-based version: %+v", w)
+	}
+}

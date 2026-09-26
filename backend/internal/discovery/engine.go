@@ -42,6 +42,11 @@ type Options struct {
 	Concurrency int `json:"concurrency"`
 	// Fingerprint probe spacing in milliseconds (rate limit).
 	ProbeSpacingMS int `json:"probe_spacing_ms"`
+	// Targets, when set, is a refresh of known devices: each is collected
+	// once and no recursion happens.
+	Targets []string `json:"targets,omitempty"`
+	// SSHCredentialID is assigned to discovered devices that have none (for the CLI).
+	SSHCredentialID int64 `json:"ssh_credential_id,omitempty"`
 }
 
 func (o *Options) defaults(seed string) {
@@ -91,6 +96,8 @@ type Engine struct {
 	queue   chan int64
 	mu      sync.Mutex
 	cancels map[int64]context.CancelFunc
+	// DefaultSSHCredential is assigned to discovered devices without one (0 = none).
+	DefaultSSHCredential int64
 	// ResolveLock serializes network-wide derivation with pollers.
 	ResolveLock sync.Mutex
 }
@@ -147,7 +154,7 @@ func (e *Engine) Submit(ctx context.Context, seed string, credID int64, opt Opti
 	}
 	var id int64
 	err := e.DB.QueryRow(ctx, `INSERT INTO discovery_runs(seed_ip, credential_id, max_depth, scope, options, status, created_by)
-		VALUES ($1,$2,$3,$4,$5,'queued',$6) RETURNING id`, seed, credID, opt.MaxDepth, opt.Scope, opt, uid).Scan(&id)
+		VALUES ($1,$2,$3,$4,$5,'queued',$6) RETURNING id`, seed, nzID(credID), opt.MaxDepth, opt.Scope, opt, uid).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -299,6 +306,13 @@ func (e *Engine) execute(parent context.Context, id int64) {
 	log.Info("discovery finished", "status", finalStatus, "summary", summary, "err", errText)
 }
 
+func nzID(id int64) any {
+	if id == 0 {
+		return nil
+	}
+	return id
+}
+
 func nz(s string) any {
 	if s == "" {
 		return nil
@@ -340,7 +354,7 @@ func (e *Engine) run(ctx context.Context, rs *runState, seed string, credID *int
 			return
 		}
 		creds := []int64{t.credID}
-		if t.via != "seed" && rs.opt.TryAllCredentials {
+		if t.via != "seed" && t.via != "refresh" && rs.opt.TryAllCredentials {
 			creds = allCreds
 		}
 		var snap *model.Snapshot
@@ -382,7 +396,7 @@ func (e *Engine) run(ctx context.Context, rs *runState, seed string, credID *int
 				}
 				e.Metrics.Inc("nexus_snmp_errors_total", label)
 			}
-			if t.via == "seed" {
+			if t.via == "seed" || len(rs.opt.Targets) == 1 {
 				mu.Lock()
 				seedErr = lastErr
 				mu.Unlock()
@@ -395,6 +409,9 @@ func (e *Engine) run(ctx context.Context, rs *runState, seed string, credID *int
 			log.Error("ingest", "ip", t.ip, "err", err)
 			e.emit(ctx, rs, Step{Key: "device", Label: "Saving " + t.ip, Status: "failed", Detail: err.Error(), Device: t.ip})
 			return
+		}
+		if sshID := firstID(rs.opt.SSHCredentialID, e.DefaultSSHCredential); sshID != 0 {
+			_, _ = e.DB.Exec(ctx, `UPDATE devices SET ssh_credential_id=$2 WHERE id=$1 AND ssh_credential_id IS NULL`, devID, sshID)
 		}
 		label := "Device identity updated"
 		if created {
@@ -438,10 +455,22 @@ func (e *Engine) run(ctx context.Context, rs *runState, seed string, credID *int
 			}
 		}
 	}
-	visited[seed] = true
-	contacted = 1
-	wg.Add(1)
-	go visit(target{ip: seed, depth: 0, via: "seed", credID: allCreds[0]})
+	if len(rs.opt.Targets) > 0 {
+		for _, ip := range rs.opt.Targets {
+			if visited[ip] {
+				continue
+			}
+			visited[ip] = true
+			contacted++
+			wg.Add(1)
+			go visit(target{ip: ip, depth: rs.opt.MaxDepth, via: "refresh", credID: e.credentialFor(ctx, ip, allCreds[0])})
+		}
+	} else {
+		visited[seed] = true
+		contacted = 1
+		wg.Add(1)
+		go visit(target{ip: seed, depth: 0, via: "seed", credID: allCreds[0]})
+	}
 	wg.Wait()
 	if ctx.Err() != nil {
 		return summary, ctx.Err()
@@ -601,4 +630,48 @@ func (e *Engine) fingerprint(ctx context.Context, opt Options) (int, error) {
 		return 0, err
 	}
 	return len(ips), nil
+}
+
+// credentialFor returns the credential a device was last collected with.
+func (e *Engine) credentialFor(ctx context.Context, ip string, def int64) int64 {
+	var id *int64
+	_ = e.DB.QueryRow(ctx, `SELECT snmp_credential_id FROM devices WHERE host(mgmt_ip)=$1 AND managed LIMIT 1`, ip).Scan(&id)
+	if id != nil {
+		return *id
+	}
+	return def
+}
+
+// SubmitRefresh queues a re-collection of every managed device (no recursion).
+func (e *Engine) SubmitRefresh(ctx context.Context, userID int64) (int64, error) {
+	rows, err := e.DB.Query(ctx, `SELECT host(mgmt_ip) FROM devices WHERE managed AND mgmt_ip IS NOT NULL ORDER BY id`)
+	if err != nil {
+		return 0, err
+	}
+	ips, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return 0, err
+	}
+	if len(ips) == 0 {
+		return 0, errors.New("no managed devices to refresh")
+	}
+	var busy bool
+	_ = e.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM discovery_runs WHERE status IN ('queued','running'))`).Scan(&busy)
+	if busy {
+		return 0, errors.New("a discovery is already in progress")
+	}
+	var scope []string
+	for _, ip := range ips {
+		scope = append(scope, ip+"/32")
+	}
+	return e.Submit(ctx, ips[0], 0, Options{Targets: ips, Scope: scope, MaxDepth: 0, MaxDevices: len(ips) + 1}, userID)
+}
+
+func firstID(ids ...int64) int64 {
+	for _, id := range ids {
+		if id != 0 {
+			return id
+		}
+	}
+	return 0
 }
