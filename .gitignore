@@ -1,0 +1,15 @@
+# build
+/backend/bin/
+/backend/nexus
+/frontend/dist/
+/frontend/node_modules/
+/tests/e2e/node_modules/
+/tests/e2e/test-results/
+/tests/e2e/playwright-report/
+*.test
+coverage.out
+# env / secrets
+.env
+*.key
+/data/
+.DS_Store
