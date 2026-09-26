@@ -338,49 +338,166 @@ func Downstream(edges []Edge, levels map[int64]int, id int64) []int64 {
 	return out
 }
 
-// Layout computes a deterministic layered layout for nodes without pinned
-// positions: levels become rows, children are placed under their parents.
+// Layout computes a deterministic tidy-tree layout for the UI: network
+// devices form the tree (by hierarchy level), and endpoints are packed in a
+// compact grid under the switch they are attached to.
 func Layout(nodes []Node, edges []Edge, levels map[int64]int) map[int64][2]float64 {
-	const dx, dy = 190.0, 170.0
-	rows := map[int][]Node{}
-	maxLevel := 0
+	const (
+		infraW, leafW = 190.0, 150.0
+		rowH, leafH   = 150.0, 64.0
+		gap           = 30.0
+		leafCols      = 6
+	)
+	byID := map[int64]Node{}
 	for _, n := range nodes {
-		l := levels[n.ID]
-		rows[l] = append(rows[l], n)
-		if l > maxLevel {
-			maxLevel = l
-		}
+		byID[n.ID] = n
 	}
+	// parent = the adjacent node with the lowest level below the node's own level
 	parent := map[int64]int64{}
 	for _, e := range edges {
-		la, lb := levels[e.A], levels[e.B]
-		if la < lb {
-			if _, ok := parent[e.B]; !ok {
-				parent[e.B] = e.A
+		for _, pair := range [][2]int64{{e.A, e.B}, {e.B, e.A}} {
+			child, par := pair[0], pair[1]
+			if _, ok := byID[child]; !ok {
+				continue
 			}
-		} else if lb < la {
-			if _, ok := parent[e.A]; !ok {
-				parent[e.A] = e.B
+			if _, ok := byID[par]; !ok {
+				continue
+			}
+			if levels[par] >= levels[child] {
+				continue
+			}
+			if cur, ok := parent[child]; !ok || levels[par] < levels[cur] || (levels[par] == levels[cur] && par < cur) {
+				parent[child] = par
 			}
 		}
 	}
-	pos := map[int64][2]float64{}
-	for l := 0; l <= maxLevel; l++ {
-		row := rows[l]
-		// order by parent x, then infra first, then label
-		sort.SliceStable(row, func(i, j int) bool {
-			pi, pj := pos[parent[row[i].ID]][0], pos[parent[row[j].ID]][0]
-			if pi != pj {
-				return pi < pj
+	infraKids := map[int64][]int64{}
+	leafKids := map[int64][]int64{}
+	var roots []int64
+	for _, n := range nodes {
+		p, ok := parent[n.ID]
+		switch {
+		case !ok:
+			roots = append(roots, n.ID)
+		case n.Infra:
+			infraKids[p] = append(infraKids[p], n.ID)
+		default:
+			if byID[p].Infra {
+				leafKids[p] = append(leafKids[p], n.ID)
+			} else {
+				infraKids[p] = append(infraKids[p], n.ID)
 			}
-			if row[i].Infra != row[j].Infra {
-				return row[i].Infra
+		}
+	}
+	sortIDs := func(ids []int64) {
+		sort.Slice(ids, func(i, j int) bool {
+			a, b := byID[ids[i]], byID[ids[j]]
+			if a.Infra != b.Infra {
+				return a.Infra
 			}
-			return row[i].Label < row[j].Label
+			return a.Label < b.Label
 		})
-		width := float64(len(row)-1) * dx
-		for i, n := range row {
-			pos[n.ID] = [2]float64{float64(i)*dx - width/2, float64(l) * dy}
+	}
+	for _, v := range infraKids {
+		sortIDs(v)
+	}
+	for _, v := range leafKids {
+		sortIDs(v)
+	}
+	// roots: infra first (largest subtrees), then isolated endpoints
+	sortIDs(roots)
+
+	gridW := func(n int) float64 {
+		if n == 0 {
+			return 0
+		}
+		c := min(n, leafCols)
+		return float64(c)*leafW - (leafW - 120)
+	}
+	width := map[int64]float64{}
+	var measure func(id int64) float64
+	measure = func(id int64) float64 {
+		if w, ok := width[id]; ok {
+			return w
+		}
+		own := leafW
+		if byID[id].Infra {
+			own = infraW
+		}
+		sum := 0.0
+		for i, c := range infraKids[id] {
+			if i > 0 {
+				sum += gap
+			}
+			sum += measure(c)
+		}
+		if g := gridW(len(leafKids[id])); g > 0 {
+			if sum > 0 {
+				sum += gap
+			}
+			sum += g
+		}
+		w := max(own, sum)
+		width[id] = w
+		return w
+	}
+	pos := map[int64][2]float64{}
+	var place func(id int64, left, y float64)
+	place = func(id int64, left, y float64) {
+		w := measure(id)
+		own := leafW
+		if byID[id].Infra {
+			own = infraW
+		}
+		pos[id] = [2]float64{left + w/2 - own/2, y}
+		// children block is centered under the node
+		total := 0.0
+		for i, c := range infraKids[id] {
+			if i > 0 {
+				total += gap
+			}
+			total += measure(c)
+		}
+		g := gridW(len(leafKids[id]))
+		if g > 0 {
+			if total > 0 {
+				total += gap
+			}
+			total += g
+		}
+		x := left + (w-total)/2
+		for _, c := range infraKids[id] {
+			place(c, x, y+rowH)
+			x += measure(c) + gap
+		}
+		for i, c := range leafKids[id] {
+			pos[c] = [2]float64{x + float64(i%leafCols)*leafW, y + rowH + float64(i/leafCols)*leafH}
+		}
+	}
+	x := 0.0
+	var loose []int64
+	for _, r := range roots {
+		if !byID[r].Infra && len(infraKids[r]) == 0 {
+			loose = append(loose, r)
+			continue
+		}
+		place(r, x, 0)
+		x += measure(r) + 2*gap
+	}
+	// unattached endpoints go in a grid to the right
+	for i, id := range loose {
+		pos[id] = [2]float64{x + float64(i%leafCols)*leafW, float64(i/leafCols) * leafH}
+	}
+	// center horizontally around 0
+	if len(pos) > 0 {
+		minX, maxX := 1e18, -1e18
+		for _, p := range pos {
+			minX = min(minX, p[0])
+			maxX = max(maxX, p[0])
+		}
+		shift := (minX + maxX) / 2
+		for id, p := range pos {
+			pos[id] = [2]float64{p[0] - shift, p[1]}
 		}
 	}
 	return pos

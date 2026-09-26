@@ -48,3 +48,9 @@ func (s *Service) Put(ctx context.Context, st Settings) error {
 	_, err := s.DB.Exec(ctx, `INSERT INTO settings(key, value) VALUES ('app', $1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`, st)
 	return err
 }
+
+// EnsureDefaults stores st if no settings exist yet.
+func (s *Service) EnsureDefaults(ctx context.Context, st Settings) error {
+	_, err := s.DB.Exec(ctx, `INSERT INTO settings(key, value) VALUES ('app', $1) ON CONFLICT (key) DO NOTHING`, st)
+	return err
+}
