@@ -299,6 +299,10 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
+		w.WriteHeader(499) // client went away; nothing to report
+		return
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "not found")
 		return

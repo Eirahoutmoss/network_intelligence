@@ -1,0 +1,52 @@
+# Nexus — Network Intelligence Platform
+#
+#   cp .env.example .env      # then set NEXUS_MASTER_KEY and passwords
+#   docker compose up -d
+#   open http://localhost:8080
+#
+# Try it without real devices: set NEXUS_SIMULATOR=1 in .env to start the
+# built-in simulated campus network (seed 10.20.99.1).
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nexus
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus -d nexus"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  nexus:
+    build:
+      context: .
+      dockerfile: deployments/docker/Dockerfile
+      args:
+        VERSION: ${NEXUS_VERSION:-0.1.0}
+    image: nexus:${NEXUS_VERSION:-0.1.0}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NEXUS_DATABASE_URL: postgres://nexus:${POSTGRES_PASSWORD}@db:5432/nexus?sslmode=disable
+      NEXUS_MASTER_KEY: ${NEXUS_MASTER_KEY:?set NEXUS_MASTER_KEY in .env (openssl rand -base64 32)}
+      NEXUS_ADMIN_USER: ${NEXUS_ADMIN_USER:-admin}
+      NEXUS_ADMIN_PASSWORD: ${NEXUS_ADMIN_PASSWORD:-}
+      NEXUS_SIMULATOR: ${NEXUS_SIMULATOR:-}
+      NEXUS_COOKIE_SECURE: ${NEXUS_COOKIE_SECURE:-false}
+      NEXUS_POLL_INTERVAL: ${NEXUS_POLL_INTERVAL:-5m}
+      NEXUS_REDISCOVER_INTERVAL: ${NEXUS_REDISCOVER_INTERVAL:-6h}
+      NEXUS_LOG_LEVEL: ${NEXUS_LOG_LEVEL:-info}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "${NEXUS_PORT:-8080}:8080"
+
+volumes:
+  db-data:

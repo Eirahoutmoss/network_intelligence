@@ -1,0 +1,11 @@
+Nexus — Network Intelligence Platform
+Copyright 2026 The Nexus authors
+
+This product is licensed under the Apache License, Version 2.0.
+
+This product bundles the IEEE MA-L (OUI) public registry as packaged by the
+"oui-data" project (https://github.com/silverwind/oui-data, BSD-2-Clause) in
+backend/internal/oui/oui.txt.gz.
+
+Third-party software dependencies and their licenses are listed in
+docs/THIRD_PARTY_LICENSES.md.
