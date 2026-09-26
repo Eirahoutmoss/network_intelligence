@@ -131,7 +131,10 @@ lldp enable
 
 In Nexus: **Add Device** → IP of the switch, username `prometheus`, the password. Watch
 the progress: reachability, "SNMP authenticated (SNMPv3 authNoPriv)", "Huawei detected",
-model, interfaces, LLDP neighbors, MAC/ARP tables, topology.
+model, interfaces, LLDP neighbors, MAC/ARP tables, topology. The SNMPv3 protocol does
+not need to be chosen: with only username and password Nexus detects authNoPriv SHA (or
+another protocol) and remembers it. Set it explicitly under *Advanced options* to skip
+detection.
 
 If authentication fails the progress shows *SNMP authentication failed* (wrong
 user/password/protocol); if nothing answers it shows *no SNMP response* (IP, ACL,

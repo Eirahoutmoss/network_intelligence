@@ -27,7 +27,11 @@ Browser ──HTTPS──> nexus (Go)
 ## Flow of a discovery
 
 1. **Add Device** creates an encrypted SNMP credential and queues a discovery run.
-2. The run **collects the seed**: reachability → SNMP authentication → system identity →
+2. The run **collects the seed**: reachability → SNMP authentication (when only a
+   username and password are given, the SNMPv3 security level and authentication
+   protocol are detected — SHA first, then SHA-2 variants and MD5; authPriv is only tried
+   when the agent reports a security-level mismatch — and the working combination is
+   stored) → system identity →
    vendor detection (sysObjectID enterprise number, then sysDescr) → standard collectors →
    vendor collectors → derived facts (port medium, transceivers).
 3. The snapshot is **ingested**: the device record is found or created through identity
@@ -92,6 +96,9 @@ numbers are strong; a network device's sysName is medium; an IP address is weak.
 - An IP only matches when the candidate has no conflicting MAC; otherwise the IP has moved
   (DHCP) and is released from the old owner.
 - First-hop redundancy MACs (VRRP/HSRP) are never used as identity.
+- Interfaces are keyed by ifIndex, but when a device renumbers its interfaces (reboot,
+  line-card change) rows are re-matched by name, so metrics history, jack mappings and
+  attachments survive; an `interfaces.renumbered` event records the change.
 
 ## Classification with confidence
 
