@@ -1,0 +1,57 @@
+# Nexus @VERSION@ — Windows x64
+
+Nexus v1 · Network Intelligence Platform · designed and developed by Hasan Güler
+
+| File | SHA-256 |
+|---|---|
+| `@FILE@` | `@SHA256@` |
+
+Signature: @SIGNED@.
+
+## Install
+
+Run `@FILE@` and accept the Windows administrator prompt. Setup checks the
+computer, installs Nexus as a Windows service with its own PostgreSQL @PGVERSION@
+database, verifies that it works and opens it in the browser, where you create
+the administrator account.
+
+Nothing else needs to be installed: no Docker, WSL, PostgreSQL, Python or
+Node.js, and no internet access is required. Supported: Windows 10 1809 or
+newer, Windows 11, Windows Server 2019 or newer, x64.
+
+Unattended installation:
+
+```
+@FILE@ /S [/PORT=8080] [/LAN=1] [/DEMO=1] [/NOSTART] [/NODESKTOP] [/NOBROWSER] [/LOG=C:\path\install.log] [/D=C:\Program Files\Nexus]
+```
+
+Exit codes: 0 success · 2 installation failed · 3 upgrade failed, previous version restored.
+
+## Where things are
+
+| What | Location |
+|---|---|
+| Program | `C:\Program Files\Nexus\app\@VERSION@\` |
+| Configuration | `C:\ProgramData\Nexus\config\nexus.env` |
+| Encryption key, database password | `C:\ProgramData\Nexus\secrets\` (administrators and the service only) |
+| Database | `C:\ProgramData\Nexus\data\db\` |
+| Logs | `C:\ProgramData\Nexus\logs\` (`install.log`, `nexus.log`, `postgres-*.log`) |
+| Backups | `C:\ProgramData\Nexus\backups\` (daily and before every upgrade) |
+
+The web interface listens on `http://localhost:<port>/` only, unless
+"Allow access from other computers" was chosen; then a Windows Firewall rule
+allows the port on domain and private networks (never public networks).
+
+## Upgrade, uninstall, backup
+
+* Running a newer installer upgrades in place: a backup is written first, the
+  new version is started and verified, and the previous version is restored
+  automatically if it does not become healthy.
+* Uninstall from Settings → Apps. Data is kept unless you tick
+  "Also delete all Nexus data" (silent: `"Uninstall Nexus.exe" /S /PURGEDATA=YES`).
+* Settings → Diagnostics & backup in the web interface exports backups and
+  redacted diagnostic bundles. Keep the file `secrets\master.key` (or export a
+  backup with the key protected by a passphrase): stored device credentials
+  can only be decrypted with it.
+
+See `docs/windows.md` in the source repository for details.

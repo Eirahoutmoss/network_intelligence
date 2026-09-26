@@ -14,3 +14,8 @@ coverage.out
 /data/
 .DS_Store
 /tests/e2e/.shots/
+# windows packaging
+/build/
+/dist/
+/backend/cmd/nexus/*.syso
+/backend/cmd/nexus-tray/*.syso

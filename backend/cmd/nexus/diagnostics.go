@@ -72,8 +72,13 @@ func backupFunc(cfg *config.Config, db *storage.DB) func(context.Context, io.Wri
 func diagnosticsCommand(args []string) error {
 	fs := flag.NewFlagSet("diagnostics", flag.ContinueOnError)
 	out := fs.String("out", "", "bundle file (default: nexus-diagnostics-<time>.zip in the current directory)")
+	gui := fs.Bool("gui", false, "Windows: ask for elevation, save the bundle on the desktop and show the result")
+	outDir := fs.String("out-dir", "", "directory for the bundle (used with --gui)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *gui {
+		return diagnosticsGUI(*outDir)
 	}
 	cfg, err := config.Load()
 	if err != nil {

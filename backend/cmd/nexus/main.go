@@ -243,6 +243,11 @@ func serve(ctx context.Context, ready func(addr string)) error {
 		return err
 	}
 	api.Version = version
+	// Installer tests: make exactly one version fail to start to exercise
+	// upgrade rollback. Has no effect unless the variable names this version.
+	if v := os.Getenv("NEXUS_TEST_FAIL_VERSION"); v != "" && v == version {
+		return fmt.Errorf("simulated startup failure of version %s (NEXUS_TEST_FAIL_VERSION)", version)
+	}
 	var extra []io.Writer
 	if cfg.LogFile != "" {
 		lf, err := logfile.Open(cfg.LogFile, 20<<20, 5)

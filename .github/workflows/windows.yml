@@ -1,0 +1,151 @@
+name: Windows installer
+
+on:
+  push:
+    branches: [main, 'claude/**']
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'deployments/windows/**'
+      - 'tests/e2e/**'
+      - 'VERSION'
+      - '.github/workflows/windows.yml'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build installer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Tools (NSIS, resource compiler)
+        run: sudo apt-get update -q && sudo apt-get install -y -q nsis binutils-mingw-w64-x86-64
+      - uses: actions/cache@v4
+        with:
+          path: build/cache
+          key: windows-deps-${{ hashFiles('deployments/windows/deps.env') }}
+      - name: Web interface
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Test builds (upgrade and rollback scenarios)
+        run: |
+          base=$(cat VERSION)
+          IFS=. read -r ma mi pa <<<"$base"
+          up="$ma.$mi.$((pa+1))"; broken="$ma.$mi.$((pa+2))"
+          echo "UPGRADE_VERSION=$up" >> "$GITHUB_ENV"; echo "BROKEN_VERSION=$broken" >> "$GITHUB_ENV"
+          SKIP_WEB=1 NEXUS_VERSION=$up deployments/windows/build.sh
+          SKIP_WEB=1 NEXUS_VERSION=$broken deployments/windows/build.sh
+          mkdir -p test-installers && mv dist/Nexus-$up-* dist/Nexus-$broken-* test-installers/
+      - name: Release build
+        run: SKIP_WEB=1 deployments/windows/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-windows-installer
+          path: |
+            dist/Nexus-*-Setup-x64.exe
+            dist/Nexus-*-Setup-x64.exe.sha256
+            dist/RELEASE-NOTES.md
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-windows-test-installers
+          path: test-installers/*.exe
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pgsql-windows
+          path: build/windows/stage/app/*/pgsql
+          retention-days: 3
+
+  unit:
+    name: Go tests on Windows
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/download-artifact@v4
+        with:
+          name: pgsql-windows
+          path: ${{ runner.temp }}\pgsql
+      - name: vet
+        working-directory: backend
+        run: go vet ./...
+      - name: test (Windows-specific packages, embedded PostgreSQL)
+        working-directory: backend
+        shell: pwsh
+        run: |
+          $bin = Get-ChildItem -Recurse -Directory "$env:RUNNER_TEMP\pgsql" | Where-Object { Test-Path (Join-Path $_.FullName 'postgres.exe') } | Select-Object -First 1
+          $env:NEXUS_TEST_PG_BIN = $bin.FullName
+          go test -count=1 -v ./internal/pgembed/ ./internal/deploy/ ./internal/logfile/ ./internal/diag/ ./internal/config/
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  install:
+    name: Install, upgrade, rollback, uninstall on Windows
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: nexus-windows-installer
+          path: ${{ runner.temp }}\dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: nexus-windows-test-installers
+          path: ${{ runner.temp }}\test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - name: Browser for the first-run test
+        working-directory: tests/e2e
+        run: npm ci --no-audit --no-fund && npx playwright install chromium
+      - name: Verify checksum
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem "$env:RUNNER_TEMP\dist\Nexus-*-Setup-x64.exe"
+          $want = (Get-Content "$($f.FullName).sha256").Split(' ')[0]
+          $got = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "checksum mismatch" }
+          "Installer $($f.Name) sha256 $got"
+      - name: Installer scenario
+        shell: pwsh
+        run: |
+          $base = (Get-ChildItem "$env:RUNNER_TEMP\dist\Nexus-*-Setup-x64.exe").FullName
+          $tests = Get-ChildItem "$env:RUNNER_TEMP\test\*.exe" | Sort-Object { [version](($_.Name -split '-')[1]) }
+          ./deployments/windows/tests/installer-test.ps1 -Installer $base -Upgrade $tests[0].FullName -Broken $tests[1].FullName -E2EDir "$PWD/tests/e2e"
+      - name: Collect logs
+        if: failure()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\logs" | Out-Null
+          Copy-Item -Recurse -Force "$env:ProgramData\Nexus\logs\*" "$env:RUNNER_TEMP\logs\" -ErrorAction SilentlyContinue
+          Copy-Item -Force "$env:RUNNER_TEMP\install*.log*" "$env:RUNNER_TEMP\logs\" -ErrorAction SilentlyContinue
+          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Nexus' } -MaxEvents 50 -ErrorAction SilentlyContinue | Format-List | Out-File "$env:RUNNER_TEMP\logs\eventlog.txt"
+          Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager' } -MaxEvents 50 -ErrorAction SilentlyContinue | Format-List | Out-File "$env:RUNNER_TEMP\logs\scm.txt"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: installer-test-logs
+          path: |
+            ${{ runner.temp }}\logs
+            tests/e2e/test-results

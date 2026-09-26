@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
@@ -70,62 +71,55 @@ func QueryService() (ServiceInfo, error) {
 		StartType: cfg.StartType, ServiceUser: cfg.ServiceStartName}, nil
 }
 
-// InstallService creates the service or updates its command line.
-func InstallService(cmdline string) error {
+// InstallService creates the service or updates its command line. It
+// returns warnings for optional settings the system did not accept.
+func InstallService(cmdline string) (warnings []string, err error) {
 	m, err := connect()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer m.Disconnect()
-	conf := mgr.Config{
-		ServiceType:      windows.SERVICE_WIN32_OWN_PROCESS,
-		StartType:        mgr.StartAutomatic,
-		ErrorControl:     mgr.ErrorNormal,
-		BinaryPathName:   cmdline,
-		DisplayName:      "Nexus Network Intelligence",
-		Description:      "Discovers and maps the network (SNMP/LLDP) and serves the Nexus web interface. Designed and developed by Hasan Güler.",
-		ServiceStartName: ServiceAccount,
-		SidType:          windows.SERVICE_SID_TYPE_UNRESTRICTED,
-		DelayedAutoStart: false,
-	}
-	s, err := m.OpenService(platform.ServiceName)
-	if err == nil {
-		defer s.Close()
-		cur, err := s.Config()
+	const display = "Nexus Network Intelligence"
+	const description = "Discovers and maps the network (SNMP/LLDP) and serves the Nexus web interface. Designed and developed by Hasan Güler."
+	var h windows.Handle
+	if s, err := m.OpenService(platform.ServiceName); err == nil {
+		h = s.Handle
+		if err := windows.ChangeServiceConfig(h, windows.SERVICE_WIN32_OWN_PROCESS, windows.SERVICE_AUTO_START, windows.SERVICE_ERROR_NORMAL,
+			toPtr(cmdline), nil, nil, nil, toPtr(ServiceAccount), nil, toPtr(display)); err != nil {
+			s.Close()
+			return nil, fmt.Errorf("update service: %w", err)
+		}
+	} else {
+		// The full command line goes into lpBinaryPathName as is
+		// (mgr.CreateService would quote the arguments itself).
+		h, err = windows.CreateService(m.Handle, toPtr(platform.ServiceName), toPtr(display),
+			windows.SERVICE_ALL_ACCESS, windows.SERVICE_WIN32_OWN_PROCESS, windows.SERVICE_AUTO_START, windows.SERVICE_ERROR_NORMAL,
+			toPtr(cmdline), nil, nil, nil, toPtr(ServiceAccount), nil)
 		if err != nil {
-			return err
+			return nil, fmt.Errorf("create service: %w", err)
 		}
-		cur.BinaryPathName = conf.BinaryPathName
-		cur.StartType = conf.StartType
-		cur.DisplayName, cur.Description = conf.DisplayName, conf.Description
-		cur.ServiceStartName = conf.ServiceStartName
-		cur.SidType = conf.SidType
-		cur.DelayedAutoStart = false
-		if err := s.UpdateConfig(cur); err != nil {
-			return fmt.Errorf("update service: %w", err)
-		}
-		return setRecovery(s)
 	}
-	// mgr.CreateService takes the binary and arguments separately and quotes
-	// them itself; pass the full command line through BinaryPathName instead.
-	h, err := windows.CreateService(m.Handle, toPtr(platform.ServiceName), toPtr(conf.DisplayName),
-		windows.SERVICE_ALL_ACCESS, conf.ServiceType, conf.StartType, conf.ErrorControl,
-		toPtr(cmdline), nil, nil, nil, toPtr(conf.ServiceStartName), nil)
-	if err != nil {
-		return fmt.Errorf("create service: %w", err)
-	}
-	s = &mgr.Service{Name: platform.ServiceName, Handle: h}
+	s := &mgr.Service{Name: platform.ServiceName, Handle: h}
 	defer s.Close()
-	cur, err := s.Config()
-	if err != nil {
-		return err
+
+	desc := windows.SERVICE_DESCRIPTION{Description: toPtr(description)}
+	if err := windows.ChangeServiceConfig2(h, windows.SERVICE_CONFIG_DESCRIPTION, (*byte)(unsafe.Pointer(&desc))); err != nil {
+		warnings = append(warnings, "description: "+err.Error())
 	}
-	cur.Description = conf.Description
-	cur.SidType = conf.SidType
-	if err := s.UpdateConfig(cur); err != nil {
-		return fmt.Errorf("configure service: %w", err)
+	sid := uint32(windows.SERVICE_SID_TYPE_UNRESTRICTED) // SERVICE_SID_INFO{dwServiceSidType}
+	if err := windows.ChangeServiceConfig2(h, windows.SERVICE_CONFIG_SERVICE_SID_INFO, (*byte)(unsafe.Pointer(&sid))); err != nil {
+		if !errors.Is(err, windows.ERROR_INVALID_LEVEL) {
+			return warnings, fmt.Errorf("service SID type: %w", err)
+		}
+		warnings = append(warnings, "service SID type not supported by this system")
 	}
-	return setRecovery(s)
+	if err := setRecovery(s); err != nil {
+		if !errors.Is(err, windows.ERROR_INVALID_LEVEL) {
+			return warnings, err
+		}
+		warnings = append(warnings, "automatic restart after failures not supported by this system")
+	}
+	return warnings, nil
 }
 
 func toPtr(s string) *uint16 {
@@ -267,14 +261,14 @@ func RemoveService() error {
 	return nil
 }
 
-// ServiceSID returns the SID string of the service's virtual account (the
-// service must exist).
+// ServiceSID returns the SID string of the service's virtual account. The
+// system lookup is preferred; the SID is computed when the lookup is not
+// available (it is fully determined by the service name).
 func ServiceSID() (string, error) {
-	sid, _, _, err := windows.LookupSID("", ServiceAccount)
-	if err != nil {
-		return "", fmt.Errorf("look up %s: %w", ServiceAccount, err)
+	if sid, _, _, err := windows.LookupSID("", ServiceAccount); err == nil {
+		return sid.String(), nil
 	}
-	return sid.String(), nil
+	return VirtualServiceSID(platform.ServiceName), nil
 }
 
 // Access masks.
