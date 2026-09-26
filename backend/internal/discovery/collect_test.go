@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -231,4 +232,38 @@ func TestCollectSTP(t *testing.T) {
 	if d := findIf(snap, "GigabitEthernet0/0/48"); d == nil || d.STPState != "disabled" {
 		t.Errorf("down port stp: %+v", d)
 	}
+}
+
+func TestSNMPv3Autodetect(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	l := lab.Campus()
+	m := l.Build()["10.20.99.11"]
+	a := &snmp.Agent{MIB: m.Main, V3Users: map[string]snmp.V3User{"ops": {AuthProtocol: "SHA256", AuthPassword: "sha256-secret"}}}
+	if err := a.Listen("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	go a.Serve(ctx)
+	c := &Collector{Dialer: snmp.NetDialer{Map: map[string]string{"10.20.99.11": a.Addr().String()}, Strict: true, Opt: snmp.Options{Timeout: 500 * time.Millisecond}}, Registry: all.Registry()}
+	var steps []Step
+	snap, used, err := c.CollectWithCredential(ctx, "10.20.99.11", credentials.SNMP{Username: "ops", AuthPassword: "sha256-secret", Autodetect: true}, false, func(s Step) { steps = append(steps, s) })
+	if err != nil {
+		t.Fatalf("autodetect failed: %v", err)
+	}
+	if used.AuthProtocol != "SHA256" || used.SecurityLevel != "authNoPriv" || used.Autodetect {
+		t.Fatalf("detected %+v", used)
+	}
+	if snap.System.Name != "SW-ACC-F1-01" {
+		t.Fatalf("snapshot %+v", snap.System)
+	}
+	// Without autodetect the same credentials fail with a clear auth error.
+	if _, err := c.Collect(ctx, "10.20.99.11", credentials.SNMP{Username: "ops", AuthPassword: "sha256-secret"}, false, nil); err == nil || !errors.Is(err, ErrAuthFailed) {
+		t.Fatalf("expected auth failure, got %v", err)
+	}
+	// A wrong password is still rejected after trying every combination.
+	start := time.Now()
+	if _, err := c.Collect(ctx, "10.20.99.11", credentials.SNMP{Username: "ops", AuthPassword: "wrong-password", Autodetect: true}, false, nil); err == nil {
+		t.Fatal("wrong password accepted")
+	}
+	t.Logf("exhaustive attempt took %v", time.Since(start))
 }

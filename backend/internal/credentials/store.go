@@ -34,6 +34,9 @@ type SNMP struct {
 	PrivPassword  string `json:"priv_password,omitempty"`  //
 	ContextName   string `json:"context_name,omitempty"`   //
 	Port          int    `json:"port,omitempty"`           // default 161
+	// Autodetect lets discovery try other auth/privacy protocols when the
+	// defaults are rejected (the user only gave a username and password).
+	Autodetect bool `json:"autodetect,omitempty"`
 }
 
 // Normalize fills defaults following the "simple by default" principle:
@@ -170,6 +173,23 @@ func (s *Store) CreateSNMP(ctx context.Context, q storage.DBTX, name string, c S
 		return 0, err
 	}
 	return s.create(ctx, q, name, KindSNMP, c.Summary(), c)
+}
+
+// UpdateSNMP re-seals an SNMP credential (e.g. after protocol auto-detection).
+func (s *Store) UpdateSNMP(ctx context.Context, id int64, c SNMP) error {
+	if err := c.Normalize(); err != nil {
+		return err
+	}
+	plain, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	sealed, err := s.sealer.Seal(plain, aad(id, KindSNMP))
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(ctx, `UPDATE credentials SET secret=$2, summary=$3, updated_at=now() WHERE id=$1 AND kind='snmp'`, id, sealed, c.Summary())
+	return err
 }
 
 func (s *Store) CreateLogin(ctx context.Context, q storage.DBTX, name, kind string, l Login) (int64, error) {

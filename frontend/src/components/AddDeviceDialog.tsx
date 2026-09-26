@@ -62,7 +62,9 @@ export function AddDeviceDialog({ open, onClose }: { open: boolean; onClose: () 
         ? { version: '2c', community: f.community || f.password }
         : {
             version: '3', username: f.username, password: f.password,
-            security_level: f.security_level || undefined, auth_protocol: f.auth_protocol,
+            // without advanced settings the server auto-detects the SNMPv3 protocols
+            security_level: advanced ? f.security_level || undefined : undefined,
+            auth_protocol: advanced ? f.auth_protocol : undefined,
             priv_protocol: f.priv_password ? f.priv_protocol : undefined, priv_password: f.priv_password || undefined,
             context: f.context || undefined,
           }

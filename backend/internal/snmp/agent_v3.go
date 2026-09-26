@@ -191,5 +191,9 @@ func (a *Agent) verifyDigest(raw []byte, sp *gosnmp.UsmSecurityParameters, u V3U
 	}
 	mac := hmac.New(h, key)
 	mac.Write(msg)
-	return hmac.Equal(mac.Sum(nil)[:len(sig)], sig)
+	sum := mac.Sum(nil)
+	if len(sig) > len(sum) {
+		return false // signature produced with a different hash
+	}
+	return hmac.Equal(sum[:len(sig)], sig)
 }

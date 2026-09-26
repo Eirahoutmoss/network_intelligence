@@ -213,6 +213,9 @@ func (c *goClient) Get(ctx context.Context, oids ...string) ([]PDU, error) {
 		if err != nil {
 			return nil, ClassifyError(err)
 		}
+		if pkt.Error == gosnmp.AuthorizationError {
+			return nil, fmt.Errorf("%w: access denied (authorizationError) — the user may need a higher security level or read access to this view", ErrAuth)
+		}
 		if pkt.Error != gosnmp.NoError && pkt.Error != gosnmp.NoSuchName {
 			return nil, fmt.Errorf("snmp get error: %s", pkt.Error)
 		}

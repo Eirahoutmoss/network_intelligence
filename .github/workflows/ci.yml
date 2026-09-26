@@ -37,7 +37,8 @@ jobs:
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q snmpd
           printf '%s\n' 'createUser prometheus SHA "testpass123"' 'createUser privuser SHA "testpass123" AES "privpass123"' \
-            'rouser prometheus auth' 'rouser privuser priv' 'sysName nexus-test-agent' > /tmp/snmpd.conf
+            'createUser privsame SHA "testpass123" AES "testpass123"' \
+            'rouser prometheus auth' 'rouser privuser priv' 'rouser privsame priv' 'sysName nexus-test-agent' > /tmp/snmpd.conf
           sudo snmpd -C -c /tmp/snmpd.conf -p /tmp/snmpd.pid udp:127.0.0.1:16161
       - name: test
         working-directory: backend

@@ -35,6 +35,66 @@ type Collector struct {
 	Log      *slog.Logger
 }
 
+// autodetect tries the usual SNMPv3 protocol combinations with the password
+// the user gave: other auth hashes first, then authPriv reusing the same
+// password for privacy (a very common configuration).
+func (c *Collector) autodetect(ctx context.Context, host string, cred credentials.SNMP, firstErr error, step func(key, label, status, detail string)) (snmp.Client, credentials.SNMP, model.System, error) {
+	type combo struct{ level, auth, priv string }
+	var combos []combo
+	for _, a := range []string{"SHA", "SHA256", "MD5", "SHA512", "SHA224", "SHA384"} {
+		if a != cred.AuthProtocol || cred.SecurityLevel != "authNoPriv" {
+			combos = append(combos, combo{"authNoPriv", a, ""})
+		}
+	}
+	for _, a := range []string{"SHA", "SHA256", "MD5"} {
+		for _, p := range []string{"AES", "AES256", "DES"} {
+			combos = append(combos, combo{"authPriv", a, p})
+		}
+	}
+	step("autodetect", "Trying other SNMPv3 security settings", "running", "")
+	lastErr := firstErr
+	// A device that requires privacy for this user answers authNoPriv requests
+	// with "unsupported security level"; only then are authPriv combos worth trying.
+	needPriv := strings.Contains(strings.ToLower(fmt.Sprint(lastErr)), "security level")
+	// A failed attempt means: "security level" in the error → try authPriv.
+	for _, cb := range combos {
+		if ctx.Err() != nil {
+			return nil, cred, model.System{}, ctx.Err()
+		}
+		if cb.level == "authPriv" && !needPriv {
+			break
+		}
+		try := cred
+		try.SecurityLevel, try.AuthProtocol, try.PrivProtocol = cb.level, cb.auth, cb.priv
+		try.PrivPassword = ""
+		if cb.level == "authPriv" {
+			try.PrivPassword = cred.AuthPassword
+		}
+		cl, err := c.Dialer.Dial(ctx, host, try)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		sys, err := collectors.Identify(ctx, cl)
+		if err == nil {
+			try.Autodetect = false
+			detail := try.SecurityLevel + " " + try.AuthProtocol
+			if try.PrivProtocol != "" {
+				detail += "/" + try.PrivProtocol
+			}
+			step("autodetect", "SNMPv3 security settings detected", "done", detail)
+			return cl, try, sys, nil
+		}
+		cl.Close()
+		lastErr = err
+		if strings.Contains(strings.ToLower(err.Error()), "security level") {
+			needPriv = true
+		}
+	}
+	step("autodetect", "SNMPv3 security settings", "failed", "no combination of the given password and common protocols was accepted")
+	return nil, cred, model.System{}, fmt.Errorf("%w", lastErr)
+}
+
 // ErrUnreachable/ErrAuth are returned for the two failure modes users care about.
 var (
 	ErrUnreachable = errors.New("device did not answer SNMP")
@@ -45,6 +105,20 @@ var (
 // applicable collector against host. Collector failures are recorded on the
 // snapshot but do not fail the whole collection.
 func (c *Collector) Collect(ctx context.Context, host string, cred credentials.SNMP, full bool, progress Progress) (*model.Snapshot, error) {
+	snap, _, err := c.CollectWithCredential(ctx, host, cred, full, progress)
+	return snap, err
+}
+
+// CollectWithCredential is Collect that also returns the credential that
+// worked (it differs from the input when SNMPv3 settings were auto-detected).
+func (c *Collector) CollectWithCredential(ctx context.Context, host string, cred credentials.SNMP, full bool, progress Progress) (*model.Snapshot, credentials.SNMP, error) {
+	snap, err := c.collect(ctx, host, &cred, full, progress)
+	return snap, cred, err
+}
+
+func (c *Collector) collect(ctx context.Context, host string, credp *credentials.SNMP, full bool, progress Progress) (*model.Snapshot, error) {
+	cred := *credp
+	defer func() { *credp = cred }()
 	if progress == nil {
 		progress = func(Step) {}
 	}
@@ -66,6 +140,15 @@ func (c *Collector) Collect(ctx context.Context, host string, cred credentials.S
 	defer client.Close()
 
 	sys, err := collectors.Identify(ctx, client)
+	if err != nil && errors.Is(err, snmp.ErrAuth) && cred.Autodetect {
+		client.Close()
+		var detected credentials.SNMP
+		client, detected, sys, err = c.autodetect(ctx, host, cred, err, step)
+		if err == nil {
+			cred = detected
+			defer client.Close()
+		}
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, snmp.ErrAuth):

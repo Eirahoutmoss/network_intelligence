@@ -457,6 +457,8 @@ func (s *Server) addDevice(w http.ResponseWriter, r *http.Request) {
 		c := credentials.SNMP{Version: in.Version, Community: in.Community, Username: strings.TrimSpace(in.Username), AuthPassword: in.Password,
 			SecurityLevel: in.SecurityLevel, AuthProtocol: in.AuthProtocol, PrivProtocol: in.PrivProtocol, PrivPassword: in.PrivPassword,
 			ContextName: in.Context, Port: in.Port}
+		// Only a username and password given: let discovery find the SNMPv3 protocols.
+		c.Autodetect = c.Username != "" && in.AuthProtocol == "" && in.SecurityLevel == "" && in.PrivProtocol == ""
 		user := c.Username
 		if c.Username == "" && c.Community == "" && in.Password != "" {
 			// "password only" means a v2c community
