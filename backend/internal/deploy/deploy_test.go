@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 func testLayout(t *testing.T) Layout {
@@ -185,5 +186,26 @@ func TestPreflight(t *testing.T) {
 	os.WriteFile(filepath.Join(l.PGDataDir(), "PG_VERSION"), []byte("16\n"), 0o600)
 	if rep := Preflight(PreflightInput{Layout: l}); !rep.Blocking || !rep.HasData {
 		t.Fatalf("missing master key not blocking: %+v", rep)
+	}
+}
+
+func TestUTF16Writer(t *testing.T) {
+	var b bytes.Buffer
+	w := &UTF16Writer{W: &b}
+	w.Write([]byte("√ Güler\n"))
+	w.Write([]byte("ok\n"))
+	got := b.Bytes()
+	if got[0] != 0xFF || got[1] != 0xFE {
+		t.Fatal("missing BOM")
+	}
+	if bytes.Count(got, []byte{0xFF, 0xFE}) != 1 {
+		t.Fatal("BOM written more than once")
+	}
+	u := make([]uint16, (len(got)-2)/2)
+	for i := range u {
+		u[i] = uint16(got[2+2*i]) | uint16(got[3+2*i])<<8
+	}
+	if s := string(utf16.Decode(u)); s != "√ Güler\r\nok\r\n" {
+		t.Fatalf("decoded %q", s)
 	}
 }
